@@ -109,7 +109,7 @@ You are a vision-based betting tip extractor. Analyze the image and determine if
 """
 
         result = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4-1106-vision-preview",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {
