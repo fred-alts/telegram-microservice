@@ -177,7 +177,7 @@ async def test_channel_message(request: Request, body: ChannelRequest):
 async def collect_tips(request: Request, body: CollectTipsRequest):
     auth_check(request)
     try:
-        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir=None)
         await app.connect()
 
         all_tips = []
@@ -185,18 +185,28 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
         for chat_id in body.chat_ids:
             messages = [m async for m in app.get_chat_history(chat_id, limit=body.limit)]
             for msg in messages:
-                text = msg.text or msg.caption
                 parsed = None
+                text = msg.text or msg.caption
 
-                if text:
-                    parsed = analyze_message_with_openai_text(text)
-                elif msg.media:
+                # --- Media (image) first ---
+                if msg.media:
+                    print(f"Found media in message {msg.id}")
                     file_path = await app.download_media(msg)
-                    image_url = upload_image_to_supabase(file_path, msg.id)
-                    if image_url:
-                        parsed = analyze_message_with_openai_image(image_url)
+                    if file_path:
+                        image_url = upload_image_to_supabase(file_path, msg.id)
+                        print(f"Uploaded to Supabase: {image_url}")
+                        if image_url:
+                            print(f"Analyzing image: {image_url}")
+                            parsed = analyze_message_with_openai_image(image_url)
 
+                # --- Text fallback ---
+                if parsed is None and text:
+                    print(f"Analyzing text message {msg.id}")
+                    parsed = analyze_message_with_openai_text(text)
+
+                # --- Store if valid tip ---
                 if parsed and parsed.get("is_tip"):
+                    print(f"Valid tip detected in message {msg.id}")
                     all_tips.append({
                         "chat_id": chat_id,
                         "message_id": msg.id,
@@ -209,4 +219,5 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
         return { "success": True, "tips": all_tips }
 
     except Exception as e:
+        print("collect-tips failed:", str(e))
         return { "success": False, "error": str(e) }
