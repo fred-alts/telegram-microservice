@@ -14,6 +14,7 @@ SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING")
 # --- AUTH ---
 def auth_check(request: Request):
     auth = request.headers.get("Authorization")
+    print("Auth header:", auth)
     if not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
