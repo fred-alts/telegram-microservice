@@ -3,3 +3,4 @@ uvicorn
 pyrogram
 tgcrypto
 supabase
+openai
