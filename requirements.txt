@@ -4,4 +4,4 @@ pyrogram
 tgcrypto
 requests
 supabase
-openai
+openai==0.28.1
