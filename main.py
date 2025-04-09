@@ -43,7 +43,7 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     try:
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpg"
         with open(file_path, "rb") as f:
-            supabase.storage().from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
+            supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
 
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
         return public_url
