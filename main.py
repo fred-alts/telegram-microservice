@@ -2,6 +2,8 @@ from fastapi import FastAPI, Request, HTTPException
 from pyrogram import Client
 from pydantic import BaseModel
 import os
+import openai
+import json
 
 app = FastAPI()
 
@@ -10,11 +12,11 @@ API_KEY = os.environ.get("TELEGRAM_SERVICE_API_KEY")
 API_ID = int(os.environ.get("TELEGRAM_API_ID"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH")
 SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING")
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 # --- AUTH ---
 def auth_check(request: Request):
     auth = request.headers.get("Authorization")
-    print("Auth header:", auth)
     if not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -24,7 +26,52 @@ class ChannelRequest(BaseModel):
 
 class CollectTipsRequest(BaseModel):
     chat_ids: list[str]
-    limit: int = 10  # messages per chat
+    limit: int = 10
+
+# --- OPENAI LOGIC ---
+def analyze_message_with_openai(text: str) -> dict:
+    if not text:
+        return { "is_tip": False }
+
+    system_prompt = """
+You are a tip detection assistant. Analyze the message and determine if it contains a betting tip.
+
+If it does, return JSON like:
+{
+  "is_tip": true,
+  "match": "Barcelona vs Real Madrid",
+  "teams": ["Barcelona", "Real Madrid"],
+  "tournament": "La Liga",
+  "datetime": "2025-04-11T20:00:00",
+  "type": "single",
+  "bets": [
+    {
+      "market": "Over 2.5 goals",
+      "outcome": "Yes",
+      "odd": 1.85,
+      "value": 50,
+      "expected_value": "High"
+    }
+  ]
+}
+
+If it is not a tip, return:
+{ "is_tip": false }
+"""
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": text }
+            ],
+            temperature=0.3
+        )
+        result = response.choices[0].message.content.strip()
+        return json.loads(result)
+    except Exception as e:
+        return { "is_tip": False, "error": str(e) }
 
 # --- ENDPOINTS ---
 
@@ -32,83 +79,6 @@ class CollectTipsRequest(BaseModel):
 async def test_connection(request: Request):
     auth_check(request)
     try:
-        app = Client(name="session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
         await app.connect()
-        me = await app.get_me()
-        await app.disconnect()
-        return {
-            "success": True,
-            "username": me.username,
-            "user_id": me.id
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@app.post("/test-channel-message")
-async def test_channel_message(request: Request, body: ChannelRequest):
-    auth_check(request)
-    try:
-        app = Client(name="session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
-        await app.connect()
-
-        # Fetch latest message
-        messages = [m async for m in app.get_chat_history(body.chat_id, limit=1)]
-        await app.disconnect()
-
-        if messages:
-            msg = messages[0]
-            return {
-                "success": True,
-                "chat_id": body.chat_id,
-                "message_id": msg.id,
-                "text": msg.text or msg.caption,
-                "media_type": str(msg.media) if msg.media else None,
-                "date": msg.date.isoformat(),
-            }
-        else:
-            return {
-                "success": False,
-                "error": "No messages found."
-            }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@app.post("/collect-tips")
-async def collect_tips(request: Request, body: CollectTipsRequest):
-    auth_check(request)
-    try:
-        app = Client(name="session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
-        await app.connect()
-
-        all_tips = []
-
-        for chat_id in body.chat_ids:
-            messages = [m async for m in app.get_chat_history(chat_id, limit=body.limit)]
-            for msg in messages:
-                all_tips.append({
-                    "chat_id": chat_id,
-                    "message_id": msg.id,
-                    "text": msg.text or msg.caption,
-                    "media_type": str(msg.media) if msg.media else None,
-                    "date": msg.date.isoformat()
-                })
-
-        await app.disconnect()
-
-        return {
-            "success": True,
-            "tips": all_tips
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+       
