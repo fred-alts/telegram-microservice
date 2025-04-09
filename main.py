@@ -99,40 +99,19 @@ If it is not a tip, return:
 
 def analyze_message_with_openai_image(image_url: str) -> dict:
     try:
-        # Download image and convert to base64
+        print(f"Analyzing image: {image_url}")  # NOVO LOG
         response = requests.get(image_url)
         base64_img = base64.b64encode(response.content).decode("utf-8")
 
         system_prompt = """
 You are a vision-based betting tip extractor. Analyze the image and determine if it shows a betting tip.
-
-If yes, return JSON like this:
-{
-  "is_tip": true,
-  "match": "Barcelona vs Real Madrid",
-  "teams": ["Barcelona", "Real Madrid"],
-  "tournament": "La Liga",
-  "datetime": "2025-04-11T20:00:00",
-  "type": "single",
-  "bets": [
-    {
-      "market": "Over 2.5 goals",
-      "outcome": "Yes",
-      "odd": 1.85,
-      "value": 50,
-      "expected_value": "High"
-    }
-  ]
-}
-
-If it is not a betting tip, return:
-{ "is_tip": false }
+...
 """
 
         result = openai.ChatCompletion.create(
             model="gpt-4-vision-preview",
             messages=[
-                { "role": "system", "content": system_prompt },
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": [
@@ -149,9 +128,11 @@ If it is not a betting tip, return:
         )
 
         content = result.choices[0].message.content.strip()
+        print(f"OpenAI Vision response: {content}")  # NOVO LOG
         return json.loads(content)
 
     except Exception as e:
+        print("OpenAI image analysis failed:", str(e))  # NOVO LOG
         return { "is_tip": False, "error": str(e) }
 
 # --- ENDPOINTS ---
