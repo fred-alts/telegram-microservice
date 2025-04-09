@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: telegram-microservice
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: TELEGRAM_SERVICE_API_KEY
+        value: your_super_secret_key
+      - key: TELEGRAM_API_ID
+        value: your_api_id
+      - key: TELEGRAM_API_HASH
+        value: your_api_hash
+      - key: TELEGRAM_SESSION_STRING
+        value: your_session_string
