@@ -2,5 +2,6 @@ fastapi
 uvicorn
 pyrogram
 tgcrypto
+requests
 supabase
 openai
