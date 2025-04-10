@@ -188,32 +188,42 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
                 parsed = None
                 text = msg.text or msg.caption
 
-                # --- Media (image) first ---
+                # --- Media handling with safety and logs ---
                 if msg.media:
                     try:
-                        print(f"Found media in message {msg.id}")
+                        print(f"[Media] 🔍 Message {msg.id} has media: {msg.media}")
+                        print("[Media] ⏳ Attempting to download...")
                         file_path = await app.download_media(msg)
+
                         if not file_path:
-                            print(f"❌ Failed to download media from message {msg.id}")
+                            print(f"[Media] ❌ Failed to download media from message {msg.id}")
                             continue
+
+                        print(f"[Media] ✅ Downloaded media to: {file_path}")
+
                         image_url = upload_image_to_supabase(file_path, msg.id)
+
                         if not image_url:
-                            print(f"❌ Failed to upload media for message {msg.id}")
+                            print(f"[Media] ❌ Failed to upload media from message {msg.id}")
                             continue
-                        print(f"Analyzing image: {image_url}")
+
+                        print(f"[Media] 📤 Uploaded to Supabase: {image_url}")
+                        print(f"[Media] 🤖 Sending to OpenAI Vision...")
                         parsed = analyze_message_with_openai_image(image_url)
+                        print(f"[Media] 🧠 GPT-4 Vision response: {parsed}")
+
                     except Exception as media_error:
-                        print(f"❌ Exception handling media from message {msg.id}: {str(media_error)}")
+                        print(f"[Media] 💥 Exception during media processing: {str(media_error)}")
                         continue
 
                 # --- Text fallback ---
                 if parsed is None and text:
-                    print(f"Analyzing text message {msg.id}")
+                    print(f"[Text] ✍️ Analyzing text message {msg.id}")
                     parsed = analyze_message_with_openai_text(text)
 
                 # --- Store if valid tip ---
                 if parsed and parsed.get("is_tip"):
-                    print(f"Valid tip detected in message {msg.id}")
+                    print(f"[TIP] ✅ Valid tip detected in message {msg.id}")
                     all_tips.append({
                         "chat_id": chat_id,
                         "message_id": msg.id,
@@ -226,5 +236,5 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
         return { "success": True, "tips": all_tips }
 
     except Exception as e:
-        print("collect-tips failed:", str(e))
+        print("[collect-tips] 💥 Exception:", str(e))
         return { "success": False, "error": str(e) }
