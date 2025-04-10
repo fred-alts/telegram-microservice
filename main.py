@@ -171,7 +171,13 @@ If it is not a betting tip, return:
 async def collect_tips(request: Request, body: CollectTipsRequest):
     auth_check(request)
     try:
-        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir=None)
+        app = Client(
+            name="session",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            session_string=SESSION_STRING,
+            in_memory=True  # ✅ mantém sessão só em RAM
+        )
         await app.connect()
 
         all_tips = []
