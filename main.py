@@ -5,10 +5,13 @@ import os
 import json
 import requests
 import base64
+import re
 from datetime import datetime
 from supabase import create_client
 import traceback
 from openai import OpenAI
+from PIL import Image
+from pyrogram.enums import MessageMediaType
 
 app = FastAPI()
 
@@ -46,13 +49,15 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
         return None
 
     try:
-        file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpg"
+        # Converte imagem para JPEG válido
+        converted_path = f"/tmp/{telegram_message_id}.jpeg"
+        with Image.open(file_path) as img:
+            rgb_img = img.convert("RGB")  # força imagem RGB
+            rgb_img.save(converted_path, "JPEG")
 
-        if not os.path.exists(file_path):
-            print(f"[Upload] ❌ File path does not exist: {file_path}")
-            return None
+        file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
 
-        with open(file_path, "rb") as f:
+        with open(converted_path, "rb") as f:
             supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
 
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
@@ -100,7 +105,7 @@ If it is not a tip, return:
                 { "role": "system", "content": system_prompt },
                 { "role": "user", "content": text }
             ],
-            temperature=0.3
+            temperature=0.0
         )
         return json.loads(result.choices[0].message.content.strip())
     except Exception as e:
@@ -113,29 +118,14 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         base64_img = base64.b64encode(response.content).decode("utf-8")
 
         system_prompt = """
-You are a vision-based betting tip extractor. Analyze the image and determine if it shows a betting tip.
+You are a professional betting tip extractor. Analyze the image and extract all betting tip information, even if it's partially visible.
 
-If yes, return JSON like this:
-{
-  "is_tip": true,
-  "match": "Barcelona vs Real Madrid",
-  "teams": ["Barcelona", "Real Madrid"],
-  "tournament": "La Liga",
-  "datetime": "2025-04-11T20:00:00",
-  "type": "single",
-  "bets": [
-    {
-      "market": "Over 2.5 goals",
-      "outcome": "Yes",
-      "odd": 1.85,
-      "value": 50,
-      "expected_value": "High"
-    }
-  ]
+Always return a strict JSON with the structure below. If you can't find some data, return null for that field.
+
+{ 
+  "is_tip": true or false, 
+  ...
 }
-
-If it is not a betting tip, return:
-{ "is_tip": false }
 """
 
         result = client.chat.completions.create(
@@ -154,12 +144,14 @@ If it is not a betting tip, return:
                     ]
                 }
             ],
-            temperature=0.2
+            temperature=0.0
         )
 
         content = result.choices[0].message.content.strip()
         print(f"OpenAI Vision response: {content}")
-        return json.loads(content)
+
+        cleaned = re.sub(r"^```(?:json)?\\s*|```$", "", content.strip(), flags=re.IGNORECASE | re.MULTILINE)
+        return json.loads(cleaned)
 
     except Exception as e:
         print("OpenAI image analysis failed:", str(e))
@@ -169,10 +161,10 @@ If it is not a betting tip, return:
 @app.post("/collect-tips")
 async def collect_tips(request: Request, body: CollectTipsRequest):
     auth_check(request)
-    try:
-        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
-        await app.connect()
+    app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 
+    try:
+        await app.connect()
         all_tips = []
 
         for chat_id in body.chat_ids:
@@ -180,6 +172,10 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
             for msg in messages:
                 parsed = None
                 text = msg.text or msg.caption
+
+                if msg.media == MessageMediaType.ANIMATION:
+                    print(f"[Media] ⚠️ Skipping animation message {msg.id}")
+                    continue
 
                 if msg.media:
                     try:
@@ -222,13 +218,15 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
                         "date": msg.date.isoformat()
                     })
 
-        await app.disconnect()
         return { "success": True, "tips": all_tips }
 
     except Exception as e:
         print("[collect-tips] 💥 Exception:", str(e))
         traceback.print_exc()
         return { "success": False, "error": str(e) }
+
+    finally:
+        await app.disconnect()
 
 @app.post("/test-connection")
 async def test_connection(request: Request):
