@@ -45,9 +45,7 @@ class CollectTipsRequest(BaseModel):
 # --- Supabase Upload ---
 def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     if not file_path:
-        print("[Upload] ❌ Received None as file_path, skipping upload")
         return None
-
     try:
         converted_path = f"/tmp/{telegram_message_id}.jpeg"
         with Image.open(file_path) as img:
@@ -55,18 +53,15 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
             rgb_img.save(converted_path, "JPEG")
 
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
-
         with open(converted_path, "rb") as f:
             supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
 
-        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
-        return public_url
-
+        return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
     except Exception as e:
-        print("[Upload] 💥 Upload failed:", e)
+        print("Upload failed:", e)
         return None
 
-# --- OpenAI ANALYSIS ---
+# --- OpenAI Prompt ---
 def get_tip_prompt():
     return """
 Você é um extrator de dicas de apostas (tips). A partir do conteúdo fornecido (imagem ou texto), identifique se é uma tip válida.
@@ -76,10 +71,7 @@ Se não for uma tip, retorne:
 { "is_tip": false }
 ```
 
----
-
 Se for uma tip, retorne exatamente neste formato:
-
 ```json
 {
   "is_tip": true,
@@ -96,19 +88,12 @@ Se for uma tip, retorne exatamente neste formato:
     }
   ]
 }
-```
-
-Observações:
-- "odd" é a odd total da tip.
-- "individual_odd" é a odd de cada aposta dentro da lista.
-- Para tips "single", só haverá 1 aposta e odd == individual_odd.
-- Use null caso não consiga extrair algum dado.
 """
 
+# --- OpenAI Analysis ---
 def analyze_message_with_openai_text(text: str) -> dict:
     if not text:
         return { "is_tip": False }
-
     try:
         result = client.chat.completions.create(
             model="gpt-4o",
@@ -119,29 +104,20 @@ def analyze_message_with_openai_text(text: str) -> dict:
             temperature=0.0
         )
         content = result.choices[0].message.content.strip()
-        print(f"[GPT RAW] 🔍 Raw GPT content:\n{content}")
-
         cleaned = content.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned.removeprefix("```json").strip()
         if cleaned.endswith("```"):
             cleaned = cleaned.removesuffix("```").strip()
-
-        try:
-            return json.loads(cleaned)
-        except Exception as e:
-            print(f"[JSON Parse] 💥 Failed to parse GPT response: {e}")
-            return { "is_tip": False, "error": f"json.loads failed: {str(e)}", "raw": cleaned }
-
+        return json.loads(cleaned)
     except Exception as e:
+        print("OpenAI text analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
 def analyze_message_with_openai_image(image_url: str) -> dict:
     try:
-        print(f"Analyzing image: {image_url}")
         response = requests.get(image_url)
         base64_img = base64.b64encode(response.content).decode("utf-8")
-
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -160,23 +136,73 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
             ],
             temperature=0.0
         )
-
         content = result.choices[0].message.content.strip()
-        print(f"[GPT RAW] 🔍 Raw GPT content:\n{content}")
-
         cleaned = content.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned.removeprefix("```json").strip()
         if cleaned.endswith("```"):
             cleaned = cleaned.removesuffix("```").strip()
-
-        try:
-            parsed = json.loads(cleaned)
-            return parsed
-        except Exception as e:
-            print(f"[JSON Parse] 💥 Failed to parse GPT response: {e}")
-            return { "is_tip": False, "error": f"json.loads failed: {str(e)}", "raw": cleaned }
-
+        return json.loads(cleaned)
     except Exception as e:
         print("OpenAI image analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
+
+# --- ROUTES ---
+@app.post("/test-connection")
+def test_connection(request: Request):
+    auth_check(request)
+    return { "success": True }
+
+@app.post("/test-channel-message")
+def test_channel_message(data: ChannelRequest, request: Request):
+    auth_check(request)
+    app_client = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp")
+    with app_client:
+        messages = list(app_client.get_chat_history(data.chat_id, limit=1))
+        if not messages:
+            raise HTTPException(status_code=404, detail="No messages found")
+        msg = messages[0]
+        return {
+            "success": True,
+            "chat_id": data.chat_id,
+            "message_id": msg.id,
+            "text": msg.text or msg.caption,
+            "media_type": msg.media,
+            "date": msg.date.isoformat()
+        }
+
+@app.post("/collect-tips")
+def collect_tips(data: CollectTipsRequest, request: Request):
+    auth_check(request)
+    app_client = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp")
+    tips = []
+
+    with app_client:
+        for chat_id in data.chat_ids:
+            for msg in app_client.get_chat_history(chat_id, limit=data.limit):
+                tip_data = {
+                    "chat_id": chat_id,
+                    "message_id": msg.id,
+                    "text": msg.text or msg.caption,
+                    "date": msg.date.isoformat(),
+                    "parsed": None
+                }
+
+                try:
+                    if msg.media == MessageMediaType.PHOTO:
+                        print(f"[Media] 🔍 Message {msg.id} has media: {msg.media}")
+                        path = app_client.download_media(msg)
+                        image_url = upload_image_to_supabase(path, msg.id)
+                        if image_url:
+                            tip_data["image_url"] = image_url
+                            print("[Media] 🧠 Sending to OpenAI Vision...")
+                            tip_data["parsed"] = analyze_message_with_openai_image(image_url)
+                    else:
+                        print(f"[Text] ✍️ Analyzing text message {msg.id}")
+                        tip_data["parsed"] = analyze_message_with_openai_text(tip_data["text"])
+                except Exception as e:
+                    tip_data["parsed"] = { "is_tip": False, "error": str(e) }
+
+                tips.append(tip_data)
+
+    return { "success": True, "tips": tips }
