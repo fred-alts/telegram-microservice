@@ -41,10 +41,14 @@ class CollectTipsRequest(BaseModel):
 # --- Supabase Upload ---
 def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     if not file_path:
-        print("[Upload] ❌ Received None as file_path")
+        print("[Upload] ❌ Received None as file_path, skipping upload")
         return None
     try:
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpg"
+        # Verificação redundante de segurança
+        if not os.path.exists(file_path):
+            print(f"[Upload] ❌ File path does not exist: {file_path}")
+            return None
         with open(file_path, "rb") as f:
             supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
