@@ -155,11 +155,14 @@ Always return a strict JSON with the structure below. If you can't find some dat
 
         try:
             parsed = json.loads(cleaned)
-        return parsed
+            return parsed
+        except Exception as e:
+            print(f"[JSON Parse] 💥 Failed to parse GPT response: {e}")
+            return { "is_tip": False, "error": f"json.loads failed: {str(e)}", "raw": cleaned }
 
     except Exception as e:
-        print(f"[JSON Parse] 💥 Failed to parse GPT response: {e}")
-        return { "is_tip": False, "error": f"json.loads failed: {str(e)}", "raw": cleaned }
+        print("OpenAI image analysis failed:", str(e))
+        return { "is_tip": False, "error": str(e) }
 
 # --- ENDPOINTS ---
 @app.post("/collect-tips")
