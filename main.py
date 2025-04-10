@@ -5,13 +5,13 @@ import os
 import json
 import requests
 import base64
-import re
 from datetime import datetime
 from supabase import create_client
 import traceback
 from openai import OpenAI
 from PIL import Image
 from pyrogram.enums import MessageMediaType
+import asyncio
 
 app = FastAPI()
 
@@ -149,37 +149,32 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
 
 # --- ROUTES ---
 @app.post("/test-connection")
-def test_connection(request: Request):
+async def test_connection(request: Request):
     auth_check(request)
     return { "success": True }
 
 @app.post("/test-channel-message")
-def test_channel_message(data: ChannelRequest, request: Request):
+async def test_channel_message(data: ChannelRequest, request: Request):
     auth_check(request)
-    app_client = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp")
-    with app_client:
-        messages = list(app_client.get_chat_history(data.chat_id, limit=1))
-        if not messages:
-            raise HTTPException(status_code=404, detail="No messages found")
-        msg = messages[0]
-        return {
-            "success": True,
-            "chat_id": data.chat_id,
-            "message_id": msg.id,
-            "text": msg.text or msg.caption,
-            "media_type": msg.media,
-            "date": msg.date.isoformat()
-        }
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp") as app_client:
+        async for msg in app_client.get_chat_history(data.chat_id, limit=1):
+            return {
+                "success": True,
+                "chat_id": data.chat_id,
+                "message_id": msg.id,
+                "text": msg.text or msg.caption,
+                "media_type": msg.media,
+                "date": msg.date.isoformat()
+            }
 
 @app.post("/collect-tips")
-def collect_tips(data: CollectTipsRequest, request: Request):
+async def collect_tips(data: CollectTipsRequest, request: Request):
     auth_check(request)
-    app_client = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp")
     tips = []
 
-    with app_client:
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp") as app_client:
         for chat_id in data.chat_ids:
-            for msg in app_client.get_chat_history(chat_id, limit=data.limit):
+            async for msg in app_client.get_chat_history(chat_id, limit=data.limit):
                 tip_data = {
                     "chat_id": chat_id,
                     "message_id": msg.id,
@@ -187,11 +182,10 @@ def collect_tips(data: CollectTipsRequest, request: Request):
                     "date": msg.date.isoformat(),
                     "parsed": None
                 }
-
                 try:
                     if msg.media == MessageMediaType.PHOTO:
                         print(f"[Media] 🔍 Message {msg.id} has media: {msg.media}")
-                        path = app_client.download_media(msg)
+                        path = await app_client.download_media(msg)
                         image_url = upload_image_to_supabase(path, msg.id)
                         if image_url:
                             tip_data["image_url"] = image_url
