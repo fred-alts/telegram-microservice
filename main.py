@@ -2,13 +2,13 @@ from fastapi import FastAPI, Request, HTTPException
 from pyrogram import Client
 from pydantic import BaseModel
 import os
-import openai
 import json
 import requests
 import base64
 from datetime import datetime
 from supabase import create_client
 import traceback
+from openai import OpenAI
 
 app = FastAPI()
 
@@ -17,13 +17,13 @@ API_KEY = os.environ.get("TELEGRAM_SERVICE_API_KEY")
 API_ID = int(os.environ.get("TELEGRAM_API_ID"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH")
 SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING")
-openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "telegram-tips")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # --- AUTH ---
 def auth_check(request: Request):
@@ -94,16 +94,15 @@ If it is not a tip, return:
 """
 
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
+        result = client.chat.completions.create(
+            model="gpt-4o",
             messages=[
                 { "role": "system", "content": system_prompt },
                 { "role": "user", "content": text }
             ],
             temperature=0.3
         )
-        result = response.choices[0].message.content.strip()
-        return json.loads(result)
+        return json.loads(result.choices[0].message.content.strip())
     except Exception as e:
         return { "is_tip": False, "error": str(e) }
 
@@ -139,7 +138,7 @@ If it is not a betting tip, return:
 { "is_tip": false }
 """
 
-        result = openai.ChatCompletion.create(
+        result = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 { "role": "system", "content": system_prompt },
