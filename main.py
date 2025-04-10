@@ -40,15 +40,17 @@ class CollectTipsRequest(BaseModel):
 
 # --- Supabase Upload ---
 def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
+    if not file_path:
+        print("[Upload] ❌ Received None as file_path")
+        return None
     try:
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpg"
         with open(file_path, "rb") as f:
             supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
-
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
         return public_url
     except Exception as e:
-        print("Upload failed:", e)
+        print("[Upload] 💥 Upload failed:", e)
         return None
 
 # --- OpenAI ANALYSIS ---
