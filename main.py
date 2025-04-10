@@ -46,7 +46,7 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
         return None
 
     try:
-        file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpg"
+        file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
 
         if not os.path.exists(file_path):
             print(f"[Upload] ❌ File path does not exist: {file_path}")
