@@ -156,7 +156,7 @@ async def test_connection(request: Request):
 @app.post("/test-channel-message")
 async def test_channel_message(data: ChannelRequest, request: Request):
     auth_check(request)
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp") as app_client:
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp", workers=0) as app_client:
         async for msg in app_client.get_chat_history(data.chat_id, limit=1):
             return {
                 "success": True,
@@ -172,7 +172,7 @@ async def collect_tips(data: CollectTipsRequest, request: Request):
     auth_check(request)
     tips = []
 
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp") as app_client:
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp", workers=0) as app_client:
         for chat_id in data.chat_ids:
             async for msg in app_client.get_chat_history(chat_id, limit=data.limit):
                 tip_data = {
