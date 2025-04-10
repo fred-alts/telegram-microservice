@@ -192,12 +192,14 @@ async def collect_tips(request: Request, body: CollectTipsRequest):
                 if msg.media:
                     print(f"Found media in message {msg.id}")
                     file_path = await app.download_media(msg)
-                    if file_path:
-                        image_url = upload_image_to_supabase(file_path, msg.id)
-                        print(f"Uploaded to Supabase: {image_url}")
-                        if image_url:
-                            print(f"Analyzing image: {image_url}")
-                            parsed = analyze_message_with_openai_image(image_url)
+                    if not file_path:
+                        print(f"❌ Failed to download media from message {msg.id}")
+                        continue  # <-- pula para a próxima mensagem
+                    image_url = upload_image_to_supabase(file_path, msg.id)
+                    print(f"Uploaded to Supabase: {image_url}")
+                    if image_url:
+                        print(f"Analyzing image: {image_url}")
+                        parsed = analyze_message_with_openai_image(image_url)
 
                 # --- Text fallback ---
                 if parsed is None and text:
