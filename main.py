@@ -148,14 +148,18 @@ Always return a strict JSON with the structure below. If you can't find some dat
         )
 
         content = result.choices[0].message.content.strip()
-        print(f"OpenAI Vision response: {content}")
+        print(f"[GPT RAW] 🔍 Raw GPT content:\n{content}")
 
+        # Remove blocos de markdown tipo ```json
         cleaned = re.sub(r"^```(?:json)?\\s*|```$", "", content.strip(), flags=re.IGNORECASE | re.MULTILINE)
-        return json.loads(cleaned)
+
+        try:
+            parsed = json.loads(cleaned)
+        return parsed
 
     except Exception as e:
-        print("OpenAI image analysis failed:", str(e))
-        return { "is_tip": False, "error": str(e) }
+        print(f"[JSON Parse] 💥 Failed to parse GPT response: {e}")
+        return { "is_tip": False, "error": f"json.loads failed: {str(e)}", "raw": cleaned }
 
 # --- ENDPOINTS ---
 @app.post("/collect-tips")
