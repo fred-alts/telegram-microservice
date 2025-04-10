@@ -140,7 +140,7 @@ If it is not a betting tip, return:
 """
 
         result = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",
             messages=[
                 { "role": "system", "content": system_prompt },
                 {
@@ -171,13 +171,7 @@ If it is not a betting tip, return:
 async def collect_tips(request: Request, body: CollectTipsRequest):
     auth_check(request)
     try:
-        app = Client(
-            name="session",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            session_string=SESSION_STRING,
-            in_memory=True  # ✅ mantém sessão só em RAM
-        )
+        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
         await app.connect()
 
         all_tips = []
