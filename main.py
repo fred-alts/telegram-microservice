@@ -8,6 +8,7 @@ import requests
 import base64
 from datetime import datetime
 from supabase import create_client
+import traceback
 
 app = FastAPI()
 
@@ -43,22 +44,25 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     if not file_path:
         print("[Upload] ❌ Received None as file_path, skipping upload")
         return None
+
     try:
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpg"
-        # Verificação redundante de segurança
+
         if not os.path.exists(file_path):
             print(f"[Upload] ❌ File path does not exist: {file_path}")
             return None
+
         with open(file_path, "rb") as f:
             supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
+
         public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
         return public_url
+
     except Exception as e:
         print("[Upload] 💥 Upload failed:", e)
         return None
 
 # --- OpenAI ANALYSIS ---
-
 def analyze_message_with_openai_text(text: str) -> dict:
     if not text:
         return { "is_tip": False }
@@ -91,7 +95,7 @@ If it is not a tip, return:
 
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
+            model="gpt-4",
             messages=[
                 { "role": "system", "content": system_prompt },
                 { "role": "user", "content": text }
@@ -105,19 +109,40 @@ If it is not a tip, return:
 
 def analyze_message_with_openai_image(image_url: str) -> dict:
     try:
-        print(f"Analyzing image: {image_url}")  # NOVO LOG
+        print(f"Analyzing image: {image_url}")
         response = requests.get(image_url)
         base64_img = base64.b64encode(response.content).decode("utf-8")
 
         system_prompt = """
 You are a vision-based betting tip extractor. Analyze the image and determine if it shows a betting tip.
-...
+
+If yes, return JSON like this:
+{
+  "is_tip": true,
+  "match": "Barcelona vs Real Madrid",
+  "teams": ["Barcelona", "Real Madrid"],
+  "tournament": "La Liga",
+  "datetime": "2025-04-11T20:00:00",
+  "type": "single",
+  "bets": [
+    {
+      "market": "Over 2.5 goals",
+      "outcome": "Yes",
+      "odd": 1.85,
+      "value": 50,
+      "expected_value": "High"
+    }
+  ]
+}
+
+If it is not a betting tip, return:
+{ "is_tip": false }
 """
 
         result = openai.ChatCompletion.create(
-            model="gpt-4-1106-vision-preview",
+            model="gpt-4-vision-preview",
             messages=[
-                {"role": "system", "content": system_prompt},
+                { "role": "system", "content": system_prompt },
                 {
                     "role": "user",
                     "content": [
@@ -134,14 +159,77 @@ You are a vision-based betting tip extractor. Analyze the image and determine if
         )
 
         content = result.choices[0].message.content.strip()
-        print(f"OpenAI Vision response: {content}")  # NOVO LOG
+        print(f"OpenAI Vision response: {content}")
         return json.loads(content)
 
     except Exception as e:
-        print("OpenAI image analysis failed:", str(e))  # NOVO LOG
+        print("OpenAI image analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
 # --- ENDPOINTS ---
+@app.post("/collect-tips")
+async def collect_tips(request: Request, body: CollectTipsRequest):
+    auth_check(request)
+    try:
+        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir=None)
+        await app.connect()
+
+        all_tips = []
+
+        for chat_id in body.chat_ids:
+            messages = [m async for m in app.get_chat_history(chat_id, limit=body.limit)]
+            for msg in messages:
+                parsed = None
+                text = msg.text or msg.caption
+
+                if msg.media:
+                    try:
+                        print(f"[Media] 🔍 Message {msg.id} has media: {msg.media}")
+                        print("[Media] ⌛ Attempting to download...")
+                        file_path = await app.download_media(msg)
+
+                        if not file_path:
+                            print(f"[Media] ❌ Failed to download media from message {msg.id}")
+                            continue
+
+                        print(f"[Media] ✅ Downloaded media to: {file_path}")
+
+                        image_url = upload_image_to_supabase(file_path, msg.id)
+
+                        if not image_url:
+                            print(f"[Media] ❌ Failed to upload media from message {msg.id}")
+                            continue
+
+                        print(f"[Media] 📤 Uploaded to Supabase: {image_url}")
+                        print(f"[Media] 🧠 Sending to OpenAI Vision...")
+                        parsed = analyze_message_with_openai_image(image_url)
+                        print(f"[Media] 🧠 GPT-4 Vision response: {parsed}")
+
+                    except Exception as media_error:
+                        print(f"[Media] 💥 Exception during media processing: {str(media_error)}")
+                        continue
+
+                if parsed is None and text:
+                    print(f"[Text] ✍️ Analyzing text message {msg.id}")
+                    parsed = analyze_message_with_openai_text(text)
+
+                if parsed and parsed.get("is_tip"):
+                    print(f"[TIP] ✅ Valid tip detected in message {msg.id}")
+                    all_tips.append({
+                        "chat_id": chat_id,
+                        "message_id": msg.id,
+                        "text": text,
+                        "parsed": parsed,
+                        "date": msg.date.isoformat()
+                    })
+
+        await app.disconnect()
+        return { "success": True, "tips": all_tips }
+
+    except Exception as e:
+        print("[collect-tips] 💥 Exception:", str(e))
+        traceback.print_exc()
+        return { "success": False, "error": str(e) }
 
 @app.post("/test-connection")
 async def test_connection(request: Request):
@@ -177,70 +265,4 @@ async def test_channel_message(request: Request, body: ChannelRequest):
         else:
             return { "success": False, "error": "No messages found." }
     except Exception as e:
-        return { "success": False, "error": str(e) }
-
-@app.post("/collect-tips")
-async def collect_tips(request: Request, body: CollectTipsRequest):
-    auth_check(request)
-    try:
-        app = Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir=None)
-        await app.connect()
-
-        all_tips = []
-
-        for chat_id in body.chat_ids:
-            messages = [m async for m in app.get_chat_history(chat_id, limit=body.limit)]
-            for msg in messages:
-                parsed = None
-                text = msg.text or msg.caption
-
-                # --- Media handling with safety and logs ---
-                if msg.media:
-                    try:
-                        print(f"[Media] 🔍 Message {msg.id} has media: {msg.media}")
-                        print("[Media] ⏳ Attempting to download...")
-                        file_path = await app.download_media(msg)
-
-                        if not file_path:
-                            print(f"[Media] ❌ Failed to download media from message {msg.id}")
-                            continue
-
-                        print(f"[Media] ✅ Downloaded media to: {file_path}")
-
-                        image_url = upload_image_to_supabase(file_path, msg.id)
-
-                        if not image_url:
-                            print(f"[Media] ❌ Failed to upload media from message {msg.id}")
-                            continue
-
-                        print(f"[Media] 📤 Uploaded to Supabase: {image_url}")
-                        print(f"[Media] 🤖 Sending to OpenAI Vision...")
-                        parsed = analyze_message_with_openai_image(image_url)
-                        print(f"[Media] 🧠 GPT-4 Vision response: {parsed}")
-
-                    except Exception as media_error:
-                        print(f"[Media] 💥 Exception during media processing: {str(media_error)}")
-                        continue
-
-                # --- Text fallback ---
-                if parsed is None and text:
-                    print(f"[Text] ✍️ Analyzing text message {msg.id}")
-                    parsed = analyze_message_with_openai_text(text)
-
-                # --- Store if valid tip ---
-                if parsed and parsed.get("is_tip"):
-                    print(f"[TIP] ✅ Valid tip detected in message {msg.id}")
-                    all_tips.append({
-                        "chat_id": chat_id,
-                        "message_id": msg.id,
-                        "text": text,
-                        "parsed": parsed,
-                        "date": msg.date.isoformat()
-                    })
-
-        await app.disconnect()
-        return { "success": True, "tips": all_tips }
-
-    except Exception as e:
-        print("[collect-tips] 💥 Exception:", str(e))
         return { "success": False, "error": str(e) }
