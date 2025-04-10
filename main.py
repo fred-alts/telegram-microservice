@@ -151,7 +151,12 @@ Always return a strict JSON with the structure below. If you can't find some dat
         print(f"[GPT RAW] 🔍 Raw GPT content:\n{content}")
 
         # Remove blocos de markdown tipo ```json
-        cleaned = re.sub(r"^```(?:json)?\\s*|```$", "", content.strip(), flags=re.IGNORECASE | re.MULTILINE)
+        cleaned = content.strip()
+
+        if cleaned.startswith("```json"):
+            cleaned = cleaned.removeprefix("```json").strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned.removesuffix("```").strip()
 
         try:
             parsed = json.loads(cleaned)
