@@ -260,6 +260,35 @@ async def test_connection(request: Request):
     auth_check(request)
     return { "success": True }
 
+@app.post("/test-channel-message", summary="Testar se o canal pode ser acedido e devolver a última mensagem", tags=["Telegram"])
+async def test_channel_message(request: Request, body: dict = Body(...), authorization: str = Header(None, description="Bearer token da API")):
+    log_request(request, body)
+    auth_check(request)
+
+    chat_id = body.get("chat_id")
+    if not chat_id:
+        return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
+
+    try:
+        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            # Verifica se consegue aceder ao canal e buscar a última mensagem
+            messages = await app.get_chat_history(chat_id, limit=1)
+            if messages:
+                msg = messages[0]
+                return {
+                    "success": True,
+                    "last_message": {
+                        "id": msg.id,
+                        "text": msg.text or "<sem texto>",
+                        "date": msg.date.isoformat()
+                    }
+                }
+            else:
+                return {"success": True, "last_message": None}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.post("/get-channel-info")
 async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
