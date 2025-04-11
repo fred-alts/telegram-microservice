@@ -265,7 +265,7 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
                 continue
 
             try:
-                async for msg in app.get_chat_history(chat_id, reverse=True):
+                async for msg in app.get_chat_history(chat_id):
                     if since and msg.date < since:
                         break
 
