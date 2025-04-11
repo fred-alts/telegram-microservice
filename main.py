@@ -198,11 +198,15 @@ def analyze_message_with_openai_image(image_input: str) -> dict:
 
 async def process_message(msg, chat_id, tg_client):
     tip_data = None
+    print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
     if msg.text:
+        print(f"[Process] 🧠 Analyzing text message {msg.id}")
         tip_data = analyze_message_with_openai_text(msg.text)
     elif msg.photo:
         try:
+            print(f"[Process] 🧠 Downloading photo for message {msg.id}")
             file_path = await tg_client.download_media(msg.photo)
+            print(f"[Process] 🧠 Analyzing image message {msg.id}")
             tip_data = analyze_message_with_openai_image(file_path)
         except Exception as e:
             print("Erro ao processar imagem da mensagem:", e)
@@ -210,7 +214,9 @@ async def process_message(msg, chat_id, tg_client):
     if tip_data and tip_data.get("is_tip"):
         tip_data["chat_id"] = chat_id
         tip_data["message_id"] = msg.id
+        print(f"[Process] ✅ Tip detected in message {msg.id}")
         return tip_data
+    print(f"[Process] ⛔️ Message {msg.id} is not a tip")
     return None
 
 def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
@@ -246,30 +252,39 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
             }
         }
 
-async def collect_tips_until_date(chat_id, until_date, batch_size=100):
+async def collect_tips_until_date(chat_id, until_date, batch_size=5):
     collected_tips = []
     more_messages = True
     last_message_date = datetime.utcnow()
-
+    print(f"[Collect] 🔍 Starting collection from {chat_id} until {until_date.isoformat()}")
+    start_time = time.time()
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-        while more_messages:
-            print(f"Buscando mais {batch_size} mensagens de {chat_id}")
+        while more_messages and len(collected_tips) < MAX_TIPS:
+            print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
             messages = [msg async for msg in app.get_chat_history(chat_id, limit=batch_size)]
             if not messages:
+                print("[Collect] 📭 No more messages found.")
                 break
             for msg in messages:
                 if msg.date < until_date:
+                    print("[Collect] 🛑 Reached limit date.")
                     more_messages = False
                     break
                 tip_data = await process_message(msg, chat_id, app)
                 if tip_data:
                     tip_data["date"] = msg.date.isoformat()
                     collected_tips.append(tip_data)
+                    if len(collected_tips) >= MAX_TIPS:
+                        print("[Collect] 🎯 Reached max tip limit.")
+                        more_messages = False
+                        break
             last_message_date = messages[-1].date
             if last_message_date < until_date:
                 more_messages = False
+    duration = time.time() - start_time
+    print(f"[Collect] ✅ Finished collection. Total tips: {len(collected_tips)} | Time: {duration:.2f}s")
     return collected_tips
-
+    
 @app.post("/test-connection")
 async def test_connection(request: Request):
     auth_check(request)
