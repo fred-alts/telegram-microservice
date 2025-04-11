@@ -34,13 +34,16 @@ def log_request(request: Request, payload: dict):
     print(f"[Request] {request.method} {request.url}")
     print(f"[Payload] {payload}")
 
-def is_authorized(auth_header: str):
-    return auth_header == f"Bearer {API_KEY}"
-
 # --- AUTH ---
+def is_authorized(auth_header: str) -> bool:
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header.split(" ")[1]
+    return token == API_KEY
+
 def auth_check(request: Request):
-    auth = request.headers.get("Authorization")
-    if not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != API_KEY:
+    auth_header = request.headers.get("Authorization")
+    if not is_authorized(auth_header):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 # --- MODELS ---
