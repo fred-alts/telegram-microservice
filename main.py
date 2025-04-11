@@ -168,23 +168,21 @@ async def test_connection(request: Request):
     return { "success": True }
 
 @app.post("/get-channel-info")
-def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
-    log_request(request, payload)
-
-    if not is_authorized(authorization):
-        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+    auth_check(request)
 
     chat_id = payload.get("chat_id")
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
 
     try:
-        with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-            chat = app.get_chat(chat_id)
+        # Ensure async with context is properly handled in FastAPI
+        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            chat = await app.get_chat(chat_id)
 
             photo_url = None
             if chat.photo:
-                file_path = app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
+                file_path = await app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
                 photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
 
             info = {
@@ -198,11 +196,9 @@ def get_channel_info(request: Request, payload: dict = Body(...), authorization:
                 "invite_link": chat.invite_link
             }
 
-            print(f"[Info] 📡 Channel Info for {chat_id}: {info}")
             return {"success": True, "info": info}
 
     except Exception as e:
-        print(f"[Info] 💥 Error getting channel info: {e}")
         return {"success": False, "error": str(e)}
 
 @app.post("/test-channel-message")
@@ -220,11 +216,8 @@ async def test_channel_message(data: ChannelRequest, request: Request):
             }
 
 @app.post("/collect-tips")
-def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
-    log_request(request, payload)
-
-    if not is_authorized(authorization):
-        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+async def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+    auth_check(request)
 
     channels = payload.get("channels")
     collected_tips = []
@@ -232,7 +225,7 @@ def collect_tips(request: Request, payload: dict = Body(...), authorization: str
     if not channels:
         return JSONResponse(status_code=400, content={"error": "Missing channels"})
 
-    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
         for channel in channels:
             chat_id = channel.get("chat_id")
             since_str = channel.get("since")
@@ -243,10 +236,8 @@ def collect_tips(request: Request, payload: dict = Body(...), authorization: str
                 print(f"[Collect] ⚠️ Invalid date for {chat_id}, skipping")
                 continue
 
-            print(f"[Collect] ▶️ {chat_id} since {since or 'beginning'}")
-
             try:
-                for msg in app.get_chat_history(chat_id, reverse=True):
+                async for msg in app.get_chat_history(chat_id, reverse=True):
                     if since and msg.date < since:
                         break
 
@@ -257,4 +248,25 @@ def collect_tips(request: Request, payload: dict = Body(...), authorization: str
             except Exception as e:
                 print(f"[Collect] ❌ Error with {chat_id}: {e}")
 
-    print(f"[Collect] ✅ Total tips collected: {len(collected_tips)}")
+    return {"success": True, "tips": collected_tips}
+
+@app.post("/analyze-tipster-strategy")
+async def analyze_tipster_strategy(request: Request, payload: AnalyzeStrategyRequest):
+    auth_check(request)
+
+    tips = payload.tips
+
+    # Send tips to OpenAI for analysis
+    try:
+        strategy_prompt = """
+Analisando as dicas de apostas de um tipster, forneça uma análise da sua estratégia e quais são as melhores tags que podem ser usadas para identificar seus padrões de aposta, como mercados preferidos, torneios mais focados, entre outros.
+Analise as seguintes dicas de apostas:
+"""
+        result = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                { "role": "system", "content": strategy_prompt },
+                { "role": "user", "content": json.dumps(tips) }
+            ],
+            temperature=0.7
+        )
