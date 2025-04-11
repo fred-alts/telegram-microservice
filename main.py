@@ -63,11 +63,17 @@ class AnalyzeStrategyRequest(BaseModel):
 # --- FloodWait-safe wrappers ---
 async def safe_get_chat_history(app, chat_id, limit=100):
     try:
-        return await app.get_chat_history(chat_id, limit=limit)
+        messages = []
+        async for msg in app.get_chat_history(chat_id, limit=limit):
+            messages.append(msg)
+        return messages
     except FloodWait as e:
         print(f"[FloodWait] ⏳ Esperando {e.value} segundos (get_chat_history)...")
         await asyncio.sleep(e.value)
-        return await app.get_chat_history(chat_id, limit=limit)
+        messages = []
+        async for msg in app.get_chat_history(chat_id, limit=limit):
+            messages.append(msg)
+        return messages
 
 async def safe_download_media(app, media, file_name=None):
     try:
