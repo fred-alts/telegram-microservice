@@ -14,6 +14,8 @@ from pyrogram.enums import MessageMediaType
 import asyncio
 import uuid
 import time
+from pyrogram.errors import FloodWait
+import asyncio
 
 app = FastAPI()
 
@@ -57,6 +59,23 @@ class CollectTipsRequest(BaseModel):
 
 class AnalyzeStrategyRequest(BaseModel):
     tips: list[dict]
+
+# --- FloodWait-safe wrappers ---
+async def safe_get_chat_history(app, chat_id, limit=100):
+    try:
+        return await app.get_chat_history(chat_id, limit=limit)
+    except FloodWait as e:
+        print(f"[FloodWait] ⏳ Esperando {e.value} segundos (get_chat_history)...")
+        await asyncio.sleep(e.value)
+        return await app.get_chat_history(chat_id, limit=limit)
+
+async def safe_download_media(app, media, file_name=None):
+    try:
+        return await app.download_media(media, file_name=file_name)
+    except FloodWait as e:
+        print(f"[FloodWait] ⏳ Esperando {e.value} segundos (download_media)...")
+        await asyncio.sleep(e.value)
+        return await app.download_media(media, file_name=file_name)
 
 # --- Supabase Upload ---
 def upload_image_to_supabase(file_path: str, identifier: str) -> str:
@@ -253,51 +272,51 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
             }
         }
         
-# --- Collect Tips with Pagination (Get Messages Until Date) ---
-async def collect_tips_until_date(chat_id, until_date, batch_size=5):
+# --- Atualizado: coleta com limite e FloodWait safe ---
+async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_messages=30):
     collected_tips = []
-    total_messages_checked = 0
+    total_checked = 0
     more_messages = True
-    last_message_id = 0
 
-    # Calcular limite baseado na distância da data
-    now = datetime.utcnow()
-    if until_date.date() == now.date():
-        max_messages = 30
-    elif (now - until_date).days <= 7:
-        max_messages = 20
-    else:
-        max_messages = 10
+    print(f"[Collect] 🔍 Starting collection from {chat_id} until {until_date.isoformat()}")
 
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-        print(f"[Collect] 🔍 Starting collection from {chat_id} until {until_date.isoformat()} (max {max_messages} messages)")
-
-        while more_messages and total_messages_checked < max_messages:
+        while more_messages and total_checked < max_messages:
             print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
-            messages = await app.get_chat_history(chat_id, limit=batch_size, offset_id=last_message_id)
+            messages = await safe_get_chat_history(app, chat_id, limit=batch_size)
             if not messages:
-                print(f"[Collect] ❗️ No more messages from {chat_id}")
+                print(f"[Collect] ⚠️ No more messages found for {chat_id}")
                 break
             for msg in messages:
-                total_messages_checked += 1
-                print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {msg.photo is not None}")
-                if msg.date < until_date:
-                    print(f"[Collect] ⏹️ Stopped: Message {msg.id} is older than {until_date.isoformat()}")
+                if total_checked >= max_messages:
                     more_messages = False
                     break
-                tip_data = await process_message(msg, chat_id)
-                if tip_data:
+                if msg.date < until_date:
+                    more_messages = False
+                    break
+                print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
+                tip_data = None
+                try:
+                    if msg.text:
+                        tip_data = analyze_message_with_openai_text(msg.text)
+                    elif msg.photo:
+                        print(f"[Process] 🧠 Downloading photo for message {msg.id}")
+                        file_path = await safe_download_media(app, msg.photo.file_id, file_name=f"/tmp/{msg.id}.jpg")
+                        if file_path:
+                            print(f"[Process] 🧠 Analyzing image message {msg.id}")
+                            tip_data = analyze_message_with_openai_image(file_path)
+                except Exception as e:
+                    print(f"[Process] ❌ Error processing message {msg.id}: {e}")
+                total_checked += 1
+                if tip_data and tip_data.get("is_tip"):
+                    tip_data["chat_id"] = chat_id
+                    tip_data["message_id"] = msg.id
                     tip_data["date"] = msg.date.isoformat()
-                    collected_tips.append(tip_data)
                     print(f"[Process] ✅ Tip detected in message {msg.id}")
+                    collected_tips.append(tip_data)
                 else:
                     print(f"[Process] ⛔️ Message {msg.id} is not a tip")
-                if total_messages_checked >= max_messages:
-                    print(f"[Collect] ⛔️ Reached max analyzed messages: {max_messages}")
-                    more_messages = False
-                    break
-            last_message_id = messages[-1].id
-        print(f"[Collect] 🎯 Finished collecting: {len(collected_tips)} tips from {total_messages_checked} messages")
+        print(f"[Collect] ✅ Collected {len(collected_tips)} tips from {total_checked} messages")
     return collected_tips
     
 @app.post("/test-connection")
