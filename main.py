@@ -162,28 +162,24 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         return { "is_tip": False, "error": str(e) }
 
 # --- Collect Tips with Pagination (Get Messages Until Date) ---
-def collect_tips_until_date(chat_id, until_date, batch_size=100):
+async def collect_tips_until_date(chat_id, until_date, batch_size=100):
     collected_tips = []
-    last_message_date = datetime.utcnow()  # Última data de busca
     more_messages = True
+    last_message_date = datetime.utcnow()  # Última data de busca
 
-    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
         while more_messages:
             print(f"Buscando mais {batch_size} mensagens de {chat_id}")
-            messages = app.get_chat_history(chat_id, limit=batch_size)
+            messages = await app.get_chat_history(chat_id, limit=batch_size)
             if not messages:
                 break
-            
+
             for msg in messages:
-                # Se a data do primeiro item for anterior à data desejada, pare de coletar
                 if msg.date < until_date:
                     more_messages = False
                     break
-
-                # Se a data for posterior à data desejada, apenas pegue a mensagem
                 collected_tips.append(msg)
 
-            # Se a última mensagem não for anterior à data desejada, continue coletando
             last_message_date = messages[-1].date
             if last_message_date < until_date:
                 more_messages = False
@@ -197,7 +193,7 @@ async def test_connection(request: Request):
     return { "success": True }
 
 @app.post("/get-channel-info")
-def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
 
     if not is_authorized(authorization):
@@ -208,12 +204,12 @@ def get_channel_info(request: Request, payload: dict = Body(...), authorization:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
 
     try:
-        with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-            chat = app.get_chat(chat_id)
+        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            chat = await app.get_chat(chat_id)
 
             photo_url = None
             if chat.photo:
-                file_path = app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
+                file_path = await app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
                 photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
 
             info = {
@@ -234,22 +230,8 @@ def get_channel_info(request: Request, payload: dict = Body(...), authorization:
         print(f"[Info] 💥 Error getting channel info: {e}")
         return {"success": False, "error": str(e)}
 
-@app.post("/test-channel-message")
-async def test_channel_message(data: ChannelRequest, request: Request):
-    auth_check(request)
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp", no_updates=True) as app_client:
-        async for msg in app_client.get_chat_history(data.chat_id, limit=1):
-            return {
-                "success": True,
-                "chat_id": data.chat_id,
-                "message_id": msg.id,
-                "text": msg.text or msg.caption,
-                "media_type": msg.media,
-                "date": msg.date.isoformat()
-            }
-
 @app.post("/collect-tips")
-def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+async def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
 
     if not is_authorized(authorization):
@@ -261,24 +243,21 @@ def collect_tips(request: Request, payload: dict = Body(...), authorization: str
     if not channels:
         return JSONResponse(status_code=400, content={"error": "Missing channels"})
 
-    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-        for channel in channels:
-            chat_id = channel.get("chat_id")
-            since_str = channel.get("since")
+    for channel in channels:
+        chat_id = channel.get("chat_id")
+        since_str = channel.get("since")
+        try:
+            since = datetime.fromisoformat(since_str) if since_str else datetime(2025, 1, 1)
+        except:
+            print(f"[Collect] ⚠️ Invalid date for {chat_id}, skipping")
+            continue
 
-            try:
-                since = datetime.fromisoformat(since_str) if since_str else None
-            except:
-                print(f"[Collect] ⚠️ Invalid date for {chat_id}, skipping")
-                continue
+        print(f"[Collect] ▶️ {chat_id} since {since or 'beginning'}")
+        try:
+            collected_tips.extend(await collect_tips_until_date(chat_id, since))
 
-            print(f"[Collect] ▶️ {chat_id} since {since or 'beginning'}")
-
-            try:
-                collected_tips.extend(collect_tips_until_date(chat_id, since))
-
-            except Exception as e:
-                print(f"[Collect] ❌ Error with {chat_id}: {e}")
+        except Exception as e:
+            print(f"[Collect] ❌ Error with {chat_id}: {e}")
 
     print(f"[Collect] ✅ Total tips collected: {len(collected_tips)}")
-    return {"success": True, "tips": collected_tips}
+    return {"success": True, "
