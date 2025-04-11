@@ -2,15 +2,17 @@ from fastapi import FastAPI, Request, Header, Body, HTTPException
 from fastapi.responses import JSONResponse
 from pyrogram import Client
 from pydantic import BaseModel
-from pyrogram.enums import MessageMediaType
-from PIL import Image
-from openai import OpenAI
-from supabase import create_client
-from datetime import datetime
 import os
 import json
 import requests
 import base64
+from datetime import datetime
+from supabase import create_client
+from openai import OpenAI
+from PIL import Image
+from pyrogram.enums import MessageMediaType
+import asyncio
+import traceback
 
 app = FastAPI()
 
@@ -19,34 +21,40 @@ API_KEY = os.environ.get("TELEGRAM_SERVICE_API_KEY")
 API_ID = int(os.environ.get("TELEGRAM_API_ID"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH")
 SESSION_STRING = os.environ.get("TELEGRAM_SESSION_STRING")
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "telegram-tips")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-# --- External Clients ---
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# --- Helpers ---
+# --- LOG ---
 def log_request(request: Request, payload: dict):
     print(f"[Request] {request.method} {request.url}")
     print(f"[Payload] {payload}")
 
+def is_authorized(auth_header: str):
+    return auth_header == f"Bearer {API_KEY}"
+
+# --- AUTH ---
 def auth_check(request: Request):
     auth = request.headers.get("Authorization")
     if not auth or not auth.startswith("Bearer ") or auth.split(" ")[1] != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-def upload_to_supabase(file_path: str, key: str) -> str:
-    try:
-        with open(file_path, "rb") as f:
-            supabase.storage.from_(SUPABASE_BUCKET).upload(key, f)
-        return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{key}"
-    except Exception as e:
-        print(f"[Supabase] ❌ Upload error: {e}")
-        return None
+# --- MODELS ---
+class ChannelRequest(BaseModel):
+    chat_id: str
 
+class CollectTipsRequest(BaseModel):
+    chat_ids: list[str]
+    limit: int = 10
+
+class StrategyRequest(BaseModel):
+    tips: list[dict]
+
+# --- Supabase Upload ---
 def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     if not file_path:
         return None
@@ -55,19 +63,26 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
         with Image.open(file_path) as img:
             rgb_img = img.convert("RGB")
             rgb_img.save(converted_path, "JPEG")
+
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
-        return upload_to_supabase(converted_path, file_name)
+        with open(converted_path, "rb") as f:
+            supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
+
+        return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
     except Exception as e:
         print("Upload failed:", e)
         return None
 
+# --- OpenAI Prompts ---
 def get_tip_prompt():
     return """
 Você é um extrator de dicas de apostas (tips). A partir do conteúdo fornecido (imagem ou texto), identifique se é uma tip válida.
+
 Se não for uma tip, retorne:
 ```json
 { "is_tip": false }
 ```
+
 Se for uma tip, retorne exatamente neste formato:
 ```json
 {
@@ -79,35 +94,45 @@ Se for uma tip, retorne exatamente neste formato:
       "match": "Time A vs Time B",
       "tournament": "Nome do torneio (se visível)",
       "datetime": "Data e hora do jogo (formato ISO 8601, se visível)",
-      "market": "Tipo de mercado (ex: Resultado, Total de Gols, etc)",
-      "outcome": "Seleção feita na aposta",
+      "market": "Tipo de mercado",
+      "outcome": "Seleção feita",
       "individual_odd": float
     }
   ]
 }
 """
 
+def get_strategy_prompt():
+    return """
+Você é um analista de apostas. Dada uma lista de tips, responda com a estratégia geral do tipster e uma lista de tags que descrevam seu estilo.
+Responda nesse formato:
+```json
+{
+  "strategy": "Descrição da estratégia do tipster",
+  "tags": ["mercado preferido", "ligas em foco", "pré-jogo ou ao vivo"]
+}
+``` 
+"""
+
+# --- OpenAI Analysis ---
 def analyze_message_with_openai_text(text: str) -> dict:
     if not text:
-        return {"is_tip": False}
+        return { "is_tip": False }
     try:
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": get_tip_prompt()},
-                {"role": "user", "content": text}
+                { "role": "system", "content": get_tip_prompt() },
+                { "role": "user", "content": text }
             ],
             temperature=0.0
         )
         content = result.choices[0].message.content.strip()
-        if content.startswith("```json"):
-            content = content.removeprefix("```json").strip()
-        if content.endswith("```"):
-            content = content.removesuffix("```").strip()
-        return json.loads(content)
+        cleaned = content.strip("`json ")
+        return json.loads(cleaned)
     except Exception as e:
         print("OpenAI text analysis failed:", str(e))
-        return {"is_tip": False, "error": str(e)}
+        return { "is_tip": False, "error": str(e) }
 
 def analyze_message_with_openai_image(image_url: str) -> dict:
     try:
@@ -116,7 +141,7 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": get_tip_prompt()},
+                { "role": "system", "content": get_tip_prompt() },
                 {
                     "role": "user",
                     "content": [
@@ -132,29 +157,46 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
             temperature=0.0
         )
         content = result.choices[0].message.content.strip()
-        if content.startswith("```json"):
-            content = content.removeprefix("```json").strip()
-        if content.endswith("```"):
-            content = content.removesuffix("```").strip()
-        return json.loads(content)
+        cleaned = content.strip("`json ")
+        return json.loads(cleaned)
     except Exception as e:
         print("OpenAI image analysis failed:", str(e))
-        return {"is_tip": False, "error": str(e)}
+        return { "is_tip": False, "error": str(e) }
 
-# --- Models ---
-class ChannelRequest(BaseModel):
-    chat_id: str
+def analyze_tipster_strategy(tips: list[dict]) -> dict:
+    try:
+        result = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": get_strategy_prompt()},
+                {"role": "user", "content": json.dumps(tips)}
+            ],
+            temperature=0.0
+        )
+        content = result.choices[0].message.content.strip()
+        cleaned = content.strip("`json ")
+        return json.loads(cleaned)
+    except Exception as e:
+        print("OpenAI strategy analysis failed:", str(e))
+        return {"strategy": "", "tags": [], "error": str(e)}
 
-# --- Endpoints ---
+# --- ROUTES ---
 @app.post("/test-connection")
 async def test_connection(request: Request):
     auth_check(request)
-    return {"success": True}
+    return { "success": True }
+
+@app.post("/analyze-strategy")
+def analyze_strategy(request: Request, payload: StrategyRequest):
+    auth_check(request)
+    print("[Strategy] 🎯 Analyzing tipster strategy...")
+    response = analyze_tipster_strategy(payload.tips)
+    print("[Strategy] ✅ Result:", response)
+    return { "success": True, "analysis": response }
 
 @app.post("/get-channel-info")
-async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
-
     if not is_authorized(authorization):
         return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
@@ -163,14 +205,10 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
 
     try:
-        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True, workdir="/tmp") as app:
-            chat = await app.get_chat(chat_id)
-
-            photo_url = None
-            if chat.photo:
-                file_path = await app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
-                photo_url = upload_to_supabase(file_path, f"avatars/{chat.id}.jpg")
-
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            chat = app.get_chat(chat_id)
             info = {
                 "chat_id": chat_id,
                 "title": chat.title,
@@ -178,14 +216,52 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
                 "type": chat.type,
                 "members": chat.members_count,
                 "description": getattr(chat, "bio", None) or getattr(chat, "description", None),
-                "photo_url": photo_url,
                 "invite_link": chat.invite_link
             }
-
-            print(f"[Info] 📡 Channel Info for {chat_id}: {info}")
             return {"success": True, "info": info}
 
     except Exception as e:
-        print(f"[Info] 💥 Error getting channel info: {e}")
-        traceback.print_exc()
+        print("[Info] Error:", e)
         return {"success": False, "error": str(e)}
+
+@app.post("/collect-tips")
+def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+    log_request(request, payload)
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+    channels = payload.get("channels")
+    collected_tips = []
+
+    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+        for channel in channels:
+            chat_id = channel.get("chat_id")
+            since_str = channel.get("since")
+            try:
+                since = datetime.fromisoformat(since_str) if since_str else None
+            except:
+                continue
+
+            for msg in app.get_chat_history(chat_id, reverse=True):
+                if since and msg.date < since:
+                    break
+
+                parsed = None
+                if msg.media == MessageMediaType.PHOTO:
+                    path = app.download_media(msg)
+                    image_url = upload_image_to_supabase(path, msg.id)
+                    parsed = analyze_message_with_openai_image(image_url)
+                else:
+                    parsed = analyze_message_with_openai_text(msg.text or msg.caption)
+
+                if parsed.get("is_tip"):
+                    collected_tips.append({
+                        "chat_id": chat_id,
+                        "message_id": msg.id,
+                        "text": msg.text or msg.caption,
+                        "date": msg.date.isoformat(),
+                        "parsed": parsed,
+                        "image_url": image_url if msg.media == MessageMediaType.PHOTO else None
+                    })
+
+    return {"success": True, "tips": collected_tips}
