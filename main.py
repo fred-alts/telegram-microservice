@@ -12,6 +12,7 @@ from openai import OpenAI
 from PIL import Image
 from pyrogram.enums import MessageMediaType
 import asyncio
+import uuid
 
 app = FastAPI()
 
@@ -54,19 +55,19 @@ class CollectTipsRequest(BaseModel):
     limit: int = 10
 
 class AnalyzeStrategyRequest(BaseModel):
-    tips: list[dict]  # Expected structure from Supabase
+    tips: list[dict]
 
 # --- Supabase Upload ---
-def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
+def upload_image_to_supabase(file_path: str, identifier: str) -> str:
     if not file_path:
         return None
     try:
-        converted_path = f"/tmp/{telegram_message_id}.jpeg"
+        converted_path = f"/tmp/{uuid.uuid4().hex}.jpeg"
         with Image.open(file_path) as img:
             rgb_img = img.convert("RGB")
             rgb_img.save(converted_path, "JPEG")
 
-        file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
+        file_name = f"avatars/{identifier}_{datetime.utcnow().isoformat()}.jpeg"
         with open(converted_path, "rb") as f:
             supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
 
@@ -102,6 +103,32 @@ Se for uma tip, retorne exatamente neste formato:
     }
   ]
 }
+"""
+
+def get_strategy_prompt():
+    return """
+A tua tarefa é analisar uma lista de apostas (tips) e identificar a estratégia do tipster.
+
+Cada tip contém:
+- `date`: data e hora em que foi publicada a tip
+- `bets[]`: apostas feitas, com data e hora do jogo (`datetime`)
+
+Devolve o seguinte JSON:
+{
+  "strategy_description": "Descreve em até 4 linhas como o tipster aposta",
+  "tags": {
+    "Mercados Preferidos": ["..."],
+    "Ligas em Foco": ["..."],
+    "Momento das Apostas": [
+      "Live", 
+      "Mesmo dia", 
+      "1 dia antes", 
+      "2+ dias antes"
+    ],
+    "Outras": ["qualquer outro padrão que observes"]
+  }
+}
+Só devolve os momentos que se aplicam (não precisa todos). Usa sempre JSON válido.
 """
 
 # --- OpenAI Analysis ---
@@ -161,59 +188,73 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         print("OpenAI image analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
+def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
+    try:
+        messages = [
+            { "role": "system", "content": get_strategy_prompt() },
+            { "role": "user", "content": json.dumps(tips) }
+        ]
+
+        result = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.3
+        )
+
+        content = result.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content.removeprefix("```json").strip()
+        if content.endswith("```"):
+            content = content.removesuffix("```").strip()
+
+        return json.loads(content)
+
+    except Exception as e:
+        print("[OpenAI] ❌ Strategy Analysis Failed:", e)
+        return {
+            "strategy_description": "Erro na análise",
+            "tags": {
+                "Mercados Preferidos": [],
+                "Ligas em Foco": [],
+                "Momento das Apostas": [],
+                "Outras": [str(e)]
+            }
+        }
+
 def process_message(msg, chat_id):
     tip_data = None
-
-    # Analisando texto da mensagem
     if msg.text:
         tip_data = analyze_message_with_openai_text(msg.text)
-
-    # Analisando imagem da mensagem
     if msg.media and isinstance(msg.media, MessageMediaType.PHOTO):
         tip_data = analyze_message_with_openai_image(msg.media.file_id)
-
     if tip_data and tip_data.get("is_tip"):
-        # Adicionando o chat_id e o message_id
         tip_data["chat_id"] = chat_id
         tip_data["message_id"] = msg.id
         return tip_data
-
     return None
 
-# --- Collect Tips with Pagination (Get Messages Until Date) ---
 async def collect_tips_until_date(chat_id, until_date, batch_size=100):
     collected_tips = []
     more_messages = True
-    last_message_date = datetime.utcnow()  # Última data de busca
-
+    last_message_date = datetime.utcnow()
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
         while more_messages:
-            print(f"Buscando mais {batch_size} mensagens de {chat_id}")
             messages = await app.get_chat_history(chat_id, limit=batch_size)
-            
             if not messages:
                 break
-
             for msg in messages:
-                # Garantir que a data da mensagem esteja antes do limite
                 if msg.date < until_date:
                     more_messages = False
                     break
-
-                # Adicionando as informações da mensagem à lista de dicas
-                tip_data = process_message(msg, chat_id)  # Chamando a função para processar a tip
+                tip_data = process_message(msg, chat_id)
                 if tip_data:
-                    tip_data["date"] = msg.date.isoformat()  # Incluindo a data de envio da tip
+                    tip_data["date"] = msg.date.isoformat()
                     collected_tips.append(tip_data)
-
-            # Verificando a última data da mensagem para decidir se precisa continuar a busca
             last_message_date = messages[-1].date
             if last_message_date < until_date:
                 more_messages = False
-
     return collected_tips
 
-# --- ROUTES ---
 @app.post("/test-connection")
 async def test_connection(request: Request):
     auth_check(request)
@@ -222,25 +263,19 @@ async def test_connection(request: Request):
 @app.post("/get-channel-info")
 async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
-
     if not is_authorized(authorization):
         return JSONResponse(status_code=401, content={"error": "Unauthorized"})
-
     chat_id = payload.get("chat_id")
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
-
     try:
         async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
             chat = await app.get_chat(chat_id)
-
             photo_url = None
             if chat.photo:
-                # Usando big_file_id para pegar a foto do perfil em maior qualidade
                 file_id = chat.photo.big_file_id
                 file_path = await app.download_media(file_id, file_name=f"{chat.id}_profile.jpg")
-                photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
-
+                photo_url = upload_image_to_supabase(file_path, chat.id)
             info = {
                 "chat_id": chat_id,
                 "title": chat.title,
@@ -251,42 +286,36 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
                 "photo_url": photo_url,
                 "invite_link": chat.invite_link
             }
-
-            print(f"[Info] 📡 Channel Info for {chat_id}: {info}")
             return {"success": True, "info": info}
-
     except Exception as e:
-        print(f"[Info] 💥 Error getting channel info: {e}")
         return {"success": False, "error": str(e)}
 
 @app.post("/collect-tips")
 async def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
-
     if not is_authorized(authorization):
         return JSONResponse(status_code=401, content={"error": "Unauthorized"})
-
     channels = payload.get("channels")
     collected_tips = []
-
     if not channels:
         return JSONResponse(status_code=400, content={"error": "Missing channels"})
-
     for channel in channels:
         chat_id = channel.get("chat_id")
         since_str = channel.get("since")
         try:
             since = datetime.fromisoformat(since_str) if since_str else datetime(2025, 1, 1)
         except:
-            print(f"[Collect] ⚠️ Invalid date for {chat_id}, skipping")
             continue
-
-        print(f"[Collect] ▶️ {chat_id} since {since or 'beginning'}")
         try:
             collected_tips.extend(await collect_tips_until_date(chat_id, since))
-
         except Exception as e:
             print(f"[Collect] ❌ Error with {chat_id}: {e}")
-
-    print(f"[Collect] ✅ Total tips collected: {len(collected_tips)}")
     return {"success": True, "tips": collected_tips}
+
+@app.post("/get-tipster-strategy")
+async def get_tipster_strategy(request: Request, body: AnalyzeStrategyRequest, authorization: str = Header(None)):
+    log_request(request, body.dict())
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+    result = analyze_tipster_strategy_with_openai(body.tips)
+    return { "success": True, "result": result }
