@@ -207,35 +207,38 @@ async def test_channel_message(data: ChannelRequest, request: Request):
             }
 
 @app.post("/collect-tips")
-async def collect_tips(data: CollectTipsRequest, request: Request):
-    auth_check(request)
-    tips = []
+def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+    log_request(request, payload)
 
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp", no_updates=True) as app_client:
-        for chat_id in data.chat_ids:
-            async for msg in app_client.get_chat_history(chat_id, limit=data.limit):
-                tip_data = {
-                    "chat_id": chat_id,
-                    "message_id": msg.id,
-                    "text": msg.text or msg.caption,
-                    "date": msg.date.isoformat(),
-                    "parsed": None
-                }
-                try:
-                    if msg.media == MessageMediaType.PHOTO:
-                        print(f"[Media] 🔍 Message {msg.id} has media: {msg.media}")
-                        path = await app_client.download_media(msg)
-                        image_url = upload_image_to_supabase(path, msg.id)
-                        if image_url:
-                            tip_data["image_url"] = image_url
-                            print("[Media] 🧠 Sending to OpenAI Vision...")
-                            tip_data["parsed"] = analyze_message_with_openai_image(image_url)
-                    else:
-                        print(f"[Text] ✍️ Analyzing text message {msg.id}")
-                        tip_data["parsed"] = analyze_message_with_openai_text(tip_data["text"])
-                except Exception as e:
-                    tip_data["parsed"] = { "is_tip": False, "error": str(e) }
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
-                tips.append(tip_data)
+    chat_ids = payload.get("chat_ids")
+    since_str = payload.get("since")
+    collected_tips = []
 
-    return { "success": True, "tips": tips }
+    if not chat_ids:
+        return JSONResponse(status_code=400, content={"error": "Missing chat_ids"})
+
+    try:
+        since = datetime.fromisoformat(since_str) if since_str else None
+    except:
+        return JSONResponse(status_code=400, content={"error": "Invalid 'since'. Use ISO format string."})
+
+    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+        for chat_id in chat_ids:
+            print(f"[Collect] ▶️ Scanning {chat_id} since {since or 'beginning'}...")
+            try:
+                for msg in app.get_chat_history(chat_id, reverse=True):
+                    if since and msg.date < since:
+                        break
+
+                    tip_data = process_message(msg, chat_id)
+                    if tip_data:
+                        collected_tips.append(tip_data)
+
+            except Exception as e:
+                print(f"[Collect] ❌ Error with {chat_id}: {e}")
+
+    print(f"[Collect] ✅ Finished. Total tips: {len(collected_tips)}")
+    return {"success": True, "tips": collected_tips}
