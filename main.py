@@ -264,30 +264,55 @@ async def test_connection(request: Request):
 async def test_channel_message(request: Request, body: dict = Body(...), authorization: str = Header(None, description="Bearer token da API")):
     log_request(request, body)
     auth_check(request)
-
     chat_id = body.get("chat_id")
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
-
     try:
         async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-            # Verifica se consegue aceder ao canal e buscar a última mensagem
-            messages = await app.get_chat_history(chat_id, limit=1)
+            try:
+                messages = await app.get_chat_history(chat_id, limit=1)
+            except Exception as fetch_error:
+                return {
+                    "success": False,
+                    "error": f"Não foi possível aceder ao canal: {str(fetch_error)}",
+                    "reason": "Canal pode ser privado, não acessível ou com permissões limitadas"
+                }
             if messages:
                 msg = messages[0]
-                return {
-                    "success": True,
-                    "last_message": {
-                        "id": msg.id,
-                        "text": msg.text or "<sem texto>",
-                        "date": msg.date.isoformat()
-                    }
+                last_message = {
+                    "id": msg.id,
+                    "date": msg.date.isoformat()
                 }
+                if msg.text:
+                    last_message["type"] = "text"
+                    last_message["content"] = msg.text
+                elif msg.photo:
+                    try:
+                        file_path = await app.download_media(msg.photo)
+                        photo_url = upload_image_to_supabase(file_path, f"lastmsg_{msg.id}")
+                        last_message["type"] = "photo"
+                        last_message["content"] = photo_url
+                    except Exception as e:
+                        last_message["type"] = "photo"
+                        last_message["content"] = f"Erro ao obter imagem: {str(e)}"
+                elif msg.video:
+                    last_message["type"] = "video"
+                    last_message["content"] = "Mensagem contém um vídeo"
+                elif msg.sticker:
+                    last_message["type"] = "sticker"
+                    last_message["content"] = f"Sticker: {msg.sticker.emoji or 'sem emoji'}"
+                else:
+                    last_message["type"] = "none"
+                    last_message["content"] = "Última mensagem sem texto e sem imagem."
+                return {"success": True, "last_message": last_message}
             else:
-                return {"success": True, "last_message": None}
-
+                return {"success": True, "last_message": None, "info": "Canal acessível, mas sem mensagens"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": str(e),
+            "reason": "Erro inesperado ao testar o canal"
+        }
 
 @app.post("/get-channel-info")
 async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
