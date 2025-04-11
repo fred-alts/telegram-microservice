@@ -56,32 +56,8 @@ class CollectTipsRequest(BaseModel):
 class AnalyzeStrategyRequest(BaseModel):
     tips: list[dict]  # Expected structure from Supabase
 
-# Atualização da função para download de imagem de perfil
-async def download_profile_image(app, chat_id):
-    photo_url = None
-    if chat.photo:
-        # Verifique se há um file_id para a foto maior ou menor
-        file_id = chat.photo.big_file_id if chat.photo.big_file_id else chat.photo.small_file_id
-
-        if file_id:
-            try:
-                # Usar 'await' para baixar a mídia de forma assíncrona
-                file_path = await app.download_media(file_id, file_name=f"{chat_id}_profile.jpg")
-                if file_path:
-                    # Envia a foto para o Supabase e obtém a URL
-                    photo_url = await upload_image_to_supabase(file_path, f"avatars/{chat_id}.jpg")
-            except Exception as e:
-                print(f"Erro ao baixar a foto de perfil do canal {chat_id}: {e}")
-                photo_url = None
-        else:
-            print(f"O canal {chat_id} não tem uma foto de perfil válida.")
-    else:
-        print(f"O canal {chat_id} não tem foto de perfil.")
-    
-    return photo_url
-
-# --- Upload de imagem para o Supabase (também precisa ser assíncrono) ---
-async def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
+# --- Supabase Upload ---
+def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     if not file_path:
         return None
     try:
@@ -92,9 +68,7 @@ async def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> 
 
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
         with open(converted_path, "rb") as f:
-            # Agora devemos garantir que o upload para o Supabase é assíncrono, ou
-            # ao menos que a operação de download não seja conflituosa com o restante do código
-            await supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
+            supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
 
         return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
     except Exception as e:
@@ -187,6 +161,35 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         print("OpenAI image analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
+# --- Collect Tips with Pagination (Get Messages Until Date) ---
+def collect_tips_until_date(chat_id, until_date, batch_size=100):
+    collected_tips = []
+    last_message_date = datetime.utcnow()  # Última data de busca
+    more_messages = True
+
+    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+        while more_messages:
+            print(f"Buscando mais {batch_size} mensagens de {chat_id}")
+            messages = app.get_chat_history(chat_id, limit=batch_size)
+            if not messages:
+                break
+            
+            for msg in messages:
+                # Se a data do primeiro item for anterior à data desejada, pare de coletar
+                if msg.date < until_date:
+                    more_messages = False
+                    break
+
+                # Se a data for posterior à data desejada, apenas pegue a mensagem
+                collected_tips.append(msg)
+
+            # Se a última mensagem não for anterior à data desejada, continue coletando
+            last_message_date = messages[-1].date
+            if last_message_date < until_date:
+                more_messages = False
+
+    return collected_tips
+
 # --- ROUTES ---
 @app.post("/test-connection")
 async def test_connection(request: Request):
@@ -194,7 +197,7 @@ async def test_connection(request: Request):
     return { "success": True }
 
 @app.post("/get-channel-info")
-async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
 
     if not is_authorized(authorization):
@@ -208,8 +211,10 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
         with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
             chat = app.get_chat(chat_id)
 
-            # Aqui, chamamos a função assíncrona para obter a foto do perfil
-            photo_url = await download_profile_image(app, chat_id)
+            photo_url = None
+            if chat.photo:
+                file_path = app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
+                photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
 
             info = {
                 "chat_id": chat_id,
@@ -244,8 +249,11 @@ async def test_channel_message(data: ChannelRequest, request: Request):
             }
 
 @app.post("/collect-tips")
-async def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
-    auth_check(request)
+def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+    log_request(request, payload)
+
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
     channels = payload.get("channels")
     collected_tips = []
@@ -253,7 +261,7 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
     if not channels:
         return JSONResponse(status_code=400, content={"error": "Missing channels"})
 
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+    with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
         for channel in channels:
             chat_id = channel.get("chat_id")
             since_str = channel.get("since")
@@ -264,16 +272,13 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
                 print(f"[Collect] ⚠️ Invalid date for {chat_id}, skipping")
                 continue
 
-            try:
-                async for msg in app.get_chat_history(chat_id, limit=100):
-                    if since and msg.date < since:
-                        break
+            print(f"[Collect] ▶️ {chat_id} since {since or 'beginning'}")
 
-                    tip_data = process_message(msg, chat_id)
-                    if tip_data:
-                        collected_tips.append(tip_data)
+            try:
+                collected_tips.extend(collect_tips_until_date(chat_id, since))
 
             except Exception as e:
                 print(f"[Collect] ❌ Error with {chat_id}: {e}")
 
+    print(f"[Collect] ✅ Total tips collected: {len(collected_tips)}")
     return {"success": True, "tips": collected_tips}
