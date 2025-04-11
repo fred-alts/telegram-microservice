@@ -239,6 +239,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=100):
     last_message_date = datetime.utcnow()
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
         while more_messages:
+            print(f"Buscando mais {batch_size} mensagens de {chat_id}")
             messages = [msg async for msg in app.get_chat_history(chat_id, limit=batch_size)]
             if not messages:
                 break
