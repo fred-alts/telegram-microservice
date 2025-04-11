@@ -152,20 +152,23 @@ async def test_connection(request: Request):
     return {"success": True}
 
 @app.post("/get-channel-info")
-def get_channel_info(request: Request, payload: dict = Body(...)):
+async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
-    auth_check(request)
+
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
     chat_id = payload.get("chat_id")
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
 
     try:
-        with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-            chat = app.get_chat(chat_id)
+        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True, workdir="/tmp") as app:
+            chat = await app.get_chat(chat_id)
+
             photo_url = None
             if chat.photo:
-                file_path = app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
+                file_path = await app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
                 photo_url = upload_to_supabase(file_path, f"avatars/{chat.id}.jpg")
 
             info = {
@@ -184,4 +187,5 @@ def get_channel_info(request: Request, payload: dict = Body(...)):
 
     except Exception as e:
         print(f"[Info] 💥 Error getting channel info: {e}")
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
