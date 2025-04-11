@@ -233,7 +233,7 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
 async def test_channel_message(data: ChannelRequest, request: Request):
     auth_check(request)
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, workdir="/tmp", no_updates=True) as app_client:
-        async for msg in app_client.get_chat_history(data.chat_id, limit=1):
+        async for msg in app_client.get_chat_history(data.chat_id, limit=100):
             return {
                 "success": True,
                 "chat_id": data.chat_id,
