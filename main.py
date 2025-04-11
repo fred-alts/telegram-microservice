@@ -196,13 +196,13 @@ def analyze_message_with_openai_image(image_input: str) -> dict:
         print("OpenAI image analysis failed:", str(e))
         return {"is_tip": False, "error": str(e)}
 
-def process_message(msg, chat_id):
+def process_message(msg, chat_id, tg_client):
     tip_data = None
     if msg.text:
         tip_data = analyze_message_with_openai_text(msg.text)
     elif msg.photo:
         try:
-            file_path = asyncio.run(app.download_media(msg.photo))
+            file_path = await tg_client.download_media(msg.photo)
             tip_data = analyze_message_with_openai_image(file_path)
         except Exception as e:
             print("Erro ao processar imagem da mensagem:", e)
@@ -250,6 +250,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=100):
     collected_tips = []
     more_messages = True
     last_message_date = datetime.utcnow()
+
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
         while more_messages:
             print(f"Buscando mais {batch_size} mensagens de {chat_id}")
@@ -260,7 +261,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=100):
                 if msg.date < until_date:
                     more_messages = False
                     break
-                tip_data = process_message(msg, chat_id)
+                tip_data = await process_message(msg, chat_id, app)
                 if tip_data:
                     tip_data["date"] = msg.date.isoformat()
                     collected_tips.append(tip_data)
