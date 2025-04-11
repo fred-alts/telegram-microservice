@@ -29,6 +29,11 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "telegram-tips")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+# --- LOG ---
+def log_request(request: Request, payload: dict):
+    print(f"[Request] {request.method} {request.url}")
+    print(f"[Payload] {payload}")
+
 # --- AUTH ---
 def auth_check(request: Request):
     auth = request.headers.get("Authorization")
