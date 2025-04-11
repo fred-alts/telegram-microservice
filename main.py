@@ -161,6 +161,25 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         print("OpenAI image analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
+def process_message(msg, chat_id):
+    tip_data = None
+
+    # Analisando texto da mensagem
+    if msg.text:
+        tip_data = analyze_message_with_openai_text(msg.text)
+
+    # Analisando imagem da mensagem
+    if msg.media and isinstance(msg.media, MessageMediaType.PHOTO):
+        tip_data = analyze_message_with_openai_image(msg.media.file_id)
+
+    if tip_data and tip_data.get("is_tip"):
+        # Adicionando o chat_id e o message_id
+        tip_data["chat_id"] = chat_id
+        tip_data["message_id"] = msg.id
+        return tip_data
+
+    return None
+
 # --- Collect Tips with Pagination (Get Messages Until Date) ---
 async def collect_tips_until_date(chat_id, until_date, batch_size=100):
     collected_tips = []
@@ -171,15 +190,23 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=100):
         while more_messages:
             print(f"Buscando mais {batch_size} mensagens de {chat_id}")
             messages = await app.get_chat_history(chat_id, limit=batch_size)
+            
             if not messages:
                 break
 
             for msg in messages:
+                # Garantir que a data da mensagem esteja antes do limite
                 if msg.date < until_date:
                     more_messages = False
                     break
-                collected_tips.append(msg)
 
+                # Adicionando as informações da mensagem à lista de dicas
+                tip_data = process_message(msg, chat_id)  # Chamando a função para processar a tip
+                if tip_data:
+                    tip_data["date"] = msg.date.isoformat()  # Incluindo a data de envio da tip
+                    collected_tips.append(tip_data)
+
+            # Verificando a última data da mensagem para decidir se precisa continuar a busca
             last_message_date = messages[-1].date
             if last_message_date < until_date:
                 more_messages = False
@@ -209,7 +236,9 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
 
             photo_url = None
             if chat.photo:
-                file_path = await app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
+                # Usando big_file_id para pegar a foto do perfil em maior qualidade
+                file_id = chat.photo.big_file_id
+                file_path = await app.download_media(file_id, file_name=f"{chat.id}_profile.jpg")
                 photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
 
             info = {
