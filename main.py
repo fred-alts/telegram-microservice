@@ -155,14 +155,22 @@ def analyze_message_with_openai_text(text: str) -> dict:
         print("OpenAI text analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
-def analyze_message_with_openai_image(image_url: str) -> dict:
+def analyze_message_with_openai_image(image_input: str) -> dict:
     try:
-        response = requests.get(image_url)
-        base64_img = base64.b64encode(response.content).decode("utf-8")
+        if os.path.exists(image_input):
+            with open(image_input, "rb") as f:
+                image_data = f.read()
+        else:
+            response = requests.get(image_input)
+            response.raise_for_status()
+            image_data = response.content
+
+        base64_img = base64.b64encode(image_data).decode("utf-8")
+
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                { "role": "system", "content": get_tip_prompt() },
+                {"role": "system", "content": get_tip_prompt()},
                 {
                     "role": "user",
                     "content": [
@@ -186,7 +194,24 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         return json.loads(cleaned)
     except Exception as e:
         print("OpenAI image analysis failed:", str(e))
-        return { "is_tip": False, "error": str(e) }
+        return {"is_tip": False, "error": str(e)}
+
+def process_message(msg, chat_id):
+    tip_data = None
+    if msg.text:
+        tip_data = analyze_message_with_openai_text(msg.text)
+    elif msg.photo:
+        try:
+            file_path = asyncio.run(app.download_media(msg.photo))
+            tip_data = analyze_message_with_openai_image(file_path)
+        except Exception as e:
+            print("Erro ao processar imagem da mensagem:", e)
+            return None
+    if tip_data and tip_data.get("is_tip"):
+        tip_data["chat_id"] = chat_id
+        tip_data["message_id"] = msg.id
+        return tip_data
+    return None
 
 def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
     try:
@@ -220,18 +245,6 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
                 "Outras": [str(e)]
             }
         }
-
-def process_message(msg, chat_id):
-    tip_data = None
-    if msg.text:
-        tip_data = analyze_message_with_openai_text(msg.text)
-    elif msg.photo:
-        tip_data = analyze_message_with_openai_image(msg.photo.file_id)
-    if tip_data and tip_data.get("is_tip"):
-        tip_data["chat_id"] = chat_id
-        tip_data["message_id"] = msg.id
-        return tip_data
-    return None
 
 async def collect_tips_until_date(chat_id, until_date, batch_size=100):
     collected_tips = []
