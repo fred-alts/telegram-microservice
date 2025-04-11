@@ -270,7 +270,7 @@ async def test_channel_message(request: Request, body: dict = Body(...), authori
     try:
         async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
             try:
-                messages = await app.get_chat_history(chat_id, limit=1)
+                messages = [msg async for msg in app.get_chat_history(chat_id, limit=1)]
             except Exception as fetch_error:
                 return {
                     "success": False,
