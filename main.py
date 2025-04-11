@@ -153,6 +153,44 @@ async def test_connection(request: Request):
     auth_check(request)
     return { "success": True }
 
+@app.post("/get-channel-info")
+def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
+    log_request(request, payload)
+
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+    chat_id = payload.get("chat_id")
+    if not chat_id:
+        return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
+
+    try:
+        with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            chat = app.get_chat(chat_id)
+
+            photo_url = None
+            if chat.photo:
+                file_path = app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
+                photo_url = upload_to_supabase(file_path, f"avatars/{chat.id}.jpg")
+
+            info = {
+                "chat_id": chat_id,
+                "title": chat.title,
+                "username": chat.username,
+                "type": chat.type,
+                "members": chat.members_count,
+                "description": getattr(chat, "bio", None) or getattr(chat, "description", None),
+                "photo_url": photo_url,
+                "invite_link": chat.invite_link
+            }
+
+            print(f"[Info] 📡 Channel Info for {chat_id}: {info}")
+            return {"success": True, "info": info}
+
+    except Exception as e:
+        print(f"[Info] 💥 Error getting channel info: {e}")
+        return {"success": False, "error": str(e)}
+
 @app.post("/test-channel-message")
 async def test_channel_message(data: ChannelRequest, request: Request):
     auth_check(request)
