@@ -225,8 +225,8 @@ def process_message(msg, chat_id):
     tip_data = None
     if msg.text:
         tip_data = analyze_message_with_openai_text(msg.text)
-    if msg.media and isinstance(msg.media, MessageMediaType.PHOTO):
-        tip_data = analyze_message_with_openai_image(msg.media.file_id)
+    elif msg.photo:
+        tip_data = analyze_message_with_openai_image(msg.photo.file_id)
     if tip_data and tip_data.get("is_tip"):
         tip_data["chat_id"] = chat_id
         tip_data["message_id"] = msg.id
