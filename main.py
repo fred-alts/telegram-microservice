@@ -182,9 +182,14 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
 
             photo_url = None
             if chat.photo:
-                file_path = await app.download_media(chat.photo, file_name=f"{chat.id}_profile.jpg")
-                photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
-
+                # Verifica se a foto possui um arquivo grande ou pequeno
+                file_id = chat.photo.big_file_id if chat.photo.big_file_id else chat.photo.small_file_id
+                if file_id:
+                    # Baixa o arquivo da foto usando o file_id correto
+                    file_path = app.download_media(file_id, file_name=f"{chat.id}_profile.jpg")
+                    # Envia a foto para o Supabase e obtém a URL
+                    photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
+        
             info = {
                 "chat_id": chat_id,
                 "title": chat.title,
