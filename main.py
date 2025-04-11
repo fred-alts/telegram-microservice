@@ -196,7 +196,7 @@ def analyze_message_with_openai_image(image_input: str) -> dict:
         print("OpenAI image analysis failed:", str(e))
         return {"is_tip": False, "error": str(e)}
 
-def process_message(msg, chat_id, tg_client):
+async def process_message(msg, chat_id, tg_client):
     tip_data = None
     if msg.text:
         tip_data = analyze_message_with_openai_text(msg.text)
