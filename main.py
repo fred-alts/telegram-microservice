@@ -13,6 +13,9 @@ from PIL import Image
 from pyrogram.enums import MessageMediaType
 import asyncio
 import uuid
+import time
+
+MAX_TIPS = 30
 
 app = FastAPI()
 
@@ -115,7 +118,7 @@ Cada tip contém:
 
 Devolve o seguinte JSON:
 {
-  "strategy_description": "Descreve em até 4 linhas como o tipster aposta",
+  "strategy_description": "Descreve a análise estratégica de como o tipster aposta, em relação a esportes, ligas e mercados, gestão de risco, gestão de banca, tendências de apostas ou outras informações relevantes",
   "tags": {
     "Mercados Preferidos": ["..."],
     "Ligas em Foco": ["..."],
