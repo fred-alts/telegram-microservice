@@ -260,4 +260,4 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
             print(f"[Collect] ❌ Error with {chat_id}: {e}")
 
     print(f"[Collect] ✅ Total tips collected: {len(collected_tips)}")
-    return {"success": True, "
+    return {"success": True, "tips": collected_tips}
