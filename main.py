@@ -6,7 +6,7 @@ import os
 import json
 import requests
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client
 from openai import OpenAI
 from PIL import Image
@@ -14,8 +14,6 @@ from pyrogram.enums import MessageMediaType
 import asyncio
 import uuid
 import time
-
-MAX_TIPS = 30
 
 app = FastAPI()
 
@@ -254,38 +252,52 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
                 "Outras": [str(e)]
             }
         }
-
+        
+# --- Collect Tips with Pagination (Get Messages Until Date) ---
 async def collect_tips_until_date(chat_id, until_date, batch_size=5):
     collected_tips = []
+    total_messages_checked = 0
     more_messages = True
-    last_message_date = datetime.utcnow()
-    print(f"[Collect] 🔍 Starting collection from {chat_id} until {until_date.isoformat()}")
-    start_time = time.time()
+    last_message_id = 0
+
+    # Calcular limite baseado na distância da data
+    now = datetime.utcnow()
+    if until_date.date() == now.date():
+        max_messages = 30
+    elif (now - until_date).days <= 7:
+        max_messages = 20
+    else:
+        max_messages = 10
+
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-        while more_messages and len(collected_tips) < MAX_TIPS:
+        print(f"[Collect] 🔍 Starting collection from {chat_id} until {until_date.isoformat()} (max {max_messages} messages)")
+
+        while more_messages and total_messages_checked < max_messages:
             print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
-            messages = [msg async for msg in app.get_chat_history(chat_id, limit=batch_size)]
+            messages = await app.get_chat_history(chat_id, limit=batch_size, offset_id=last_message_id)
             if not messages:
-                print("[Collect] 📭 No more messages found.")
+                print(f"[Collect] ❗️ No more messages from {chat_id}")
                 break
             for msg in messages:
+                total_messages_checked += 1
+                print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {msg.photo is not None}")
                 if msg.date < until_date:
-                    print("[Collect] 🛑 Reached limit date.")
+                    print(f"[Collect] ⏹️ Stopped: Message {msg.id} is older than {until_date.isoformat()}")
                     more_messages = False
                     break
-                tip_data = await process_message(msg, chat_id, app)
+                tip_data = await process_message(msg, chat_id)
                 if tip_data:
                     tip_data["date"] = msg.date.isoformat()
                     collected_tips.append(tip_data)
-                    if len(collected_tips) >= MAX_TIPS:
-                        print("[Collect] 🎯 Reached max tip limit.")
-                        more_messages = False
-                        break
-            last_message_date = messages[-1].date
-            if last_message_date < until_date:
-                more_messages = False
-    duration = time.time() - start_time
-    print(f"[Collect] ✅ Finished collection. Total tips: {len(collected_tips)} | Time: {duration:.2f}s")
+                    print(f"[Process] ✅ Tip detected in message {msg.id}")
+                else:
+                    print(f"[Process] ⛔️ Message {msg.id} is not a tip")
+                if total_messages_checked >= max_messages:
+                    print(f"[Collect] ⛔️ Reached max analyzed messages: {max_messages}")
+                    more_messages = False
+                    break
+            last_message_id = messages[-1].id
+        print(f"[Collect] 🎯 Finished collecting: {len(collected_tips)} tips from {total_messages_checked} messages")
     return collected_tips
     
 @app.post("/test-connection")
