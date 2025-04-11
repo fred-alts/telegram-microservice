@@ -213,21 +213,25 @@ def collect_tips(request: Request, payload: dict = Body(...), authorization: str
     if not is_authorized(authorization):
         return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
-    chat_ids = payload.get("chat_ids")
-    since_str = payload.get("since")
+    channels = payload.get("channels")
     collected_tips = []
 
-    if not chat_ids:
-        return JSONResponse(status_code=400, content={"error": "Missing chat_ids"})
-
-    try:
-        since = datetime.fromisoformat(since_str) if since_str else None
-    except:
-        return JSONResponse(status_code=400, content={"error": "Invalid 'since'. Use ISO format string."})
+    if not channels:
+        return JSONResponse(status_code=400, content={"error": "Missing channels"})
 
     with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-        for chat_id in chat_ids:
-            print(f"[Collect] ▶️ Scanning {chat_id} since {since or 'beginning'}...")
+        for channel in channels:
+            chat_id = channel.get("chat_id")
+            since_str = channel.get("since")
+
+            try:
+                since = datetime.fromisoformat(since_str) if since_str else None
+            except:
+                print(f"[Collect] ⚠️ Invalid date for {chat_id}, skipping")
+                continue
+
+            print(f"[Collect] ▶️ {chat_id} since {since or 'beginning'}")
+
             try:
                 for msg in app.get_chat_history(chat_id, reverse=True):
                     if since and msg.date < since:
@@ -240,5 +244,5 @@ def collect_tips(request: Request, payload: dict = Body(...), authorization: str
             except Exception as e:
                 print(f"[Collect] ❌ Error with {chat_id}: {e}")
 
-    print(f"[Collect] ✅ Finished. Total tips: {len(collected_tips)}")
+    print(f"[Collect] ✅ Total tips collected: {len(collected_tips)}")
     return {"success": True, "tips": collected_tips}
