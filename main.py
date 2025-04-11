@@ -249,24 +249,3 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
                 print(f"[Collect] ❌ Error with {chat_id}: {e}")
 
     return {"success": True, "tips": collected_tips}
-
-@app.post("/analyze-tipster-strategy")
-async def analyze_tipster_strategy(request: Request, payload: AnalyzeStrategyRequest):
-    auth_check(request)
-
-    tips = payload.tips
-
-    # Send tips to OpenAI for analysis
-    try:
-        strategy_prompt = """
-Analisando as dicas de apostas de um tipster, forneça uma análise da sua estratégia e quais são as melhores tags que podem ser usadas para identificar seus padrões de aposta, como mercados preferidos, torneios mais focados, entre outros.
-Analise as seguintes dicas de apostas:
-"""
-        result = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                { "role": "system", "content": strategy_prompt },
-                { "role": "user", "content": json.dumps(tips) }
-            ],
-            temperature=0.7
-        )
