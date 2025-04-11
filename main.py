@@ -56,8 +56,32 @@ class CollectTipsRequest(BaseModel):
 class AnalyzeStrategyRequest(BaseModel):
     tips: list[dict]  # Expected structure from Supabase
 
-# --- Supabase Upload ---
-def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
+# Atualização da função para download de imagem de perfil
+async def download_profile_image(app, chat_id):
+    photo_url = None
+    if chat.photo:
+        # Verifique se há um file_id para a foto maior ou menor
+        file_id = chat.photo.big_file_id if chat.photo.big_file_id else chat.photo.small_file_id
+
+        if file_id:
+            try:
+                # Usar 'await' para baixar a mídia de forma assíncrona
+                file_path = await app.download_media(file_id, file_name=f"{chat_id}_profile.jpg")
+                if file_path:
+                    # Envia a foto para o Supabase e obtém a URL
+                    photo_url = await upload_image_to_supabase(file_path, f"avatars/{chat_id}.jpg")
+            except Exception as e:
+                print(f"Erro ao baixar a foto de perfil do canal {chat_id}: {e}")
+                photo_url = None
+        else:
+            print(f"O canal {chat_id} não tem uma foto de perfil válida.")
+    else:
+        print(f"O canal {chat_id} não tem foto de perfil.")
+    
+    return photo_url
+
+# --- Upload de imagem para o Supabase (também precisa ser assíncrono) ---
+async def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
     if not file_path:
         return None
     try:
@@ -68,7 +92,9 @@ def upload_image_to_supabase(file_path: str, telegram_message_id: int) -> str:
 
         file_name = f"{telegram_message_id}_{datetime.utcnow().isoformat()}.jpeg"
         with open(converted_path, "rb") as f:
-            supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
+            # Agora devemos garantir que o upload para o Supabase é assíncrono, ou
+            # ao menos que a operação de download não seja conflituosa com o restante do código
+            await supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
 
         return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
     except Exception as e:
@@ -169,27 +195,22 @@ async def test_connection(request: Request):
 
 @app.post("/get-channel-info")
 async def get_channel_info(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
-    auth_check(request)
+    log_request(request, payload)
+
+    if not is_authorized(authorization):
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
     chat_id = payload.get("chat_id")
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
 
     try:
-        # Ensure async with context is properly handled in FastAPI
-        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-            chat = await app.get_chat(chat_id)
+        with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            chat = app.get_chat(chat_id)
 
-            photo_url = None
-            if chat.photo:
-                # Verifica se a foto possui um arquivo grande ou pequeno
-                file_id = chat.photo.big_file_id if chat.photo.big_file_id else chat.photo.small_file_id
-                if file_id:
-                    # Baixa o arquivo da foto usando o file_id correto
-                    file_path = app.download_media(file_id, file_name=f"{chat.id}_profile.jpg")
-                    # Envia a foto para o Supabase e obtém a URL
-                    photo_url = upload_image_to_supabase(file_path, f"avatars/{chat.id}.jpg")
-        
+            # Aqui, chamamos a função assíncrona para obter a foto do perfil
+            photo_url = await download_profile_image(app, chat_id)
+
             info = {
                 "chat_id": chat_id,
                 "title": chat.title,
@@ -201,9 +222,11 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
                 "invite_link": chat.invite_link
             }
 
+            print(f"[Info] 📡 Channel Info for {chat_id}: {info}")
             return {"success": True, "info": info}
 
     except Exception as e:
+        print(f"[Info] 💥 Error getting channel info: {e}")
         return {"success": False, "error": str(e)}
 
 @app.post("/test-channel-message")
