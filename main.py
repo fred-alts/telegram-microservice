@@ -224,27 +224,39 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         print(f"[Image Analysis] ❌ Exception: {str(e)}")
         return { "is_tip": False, "error": str(e) }
 
-async def process_message(msg, chat_id, tg_client):
+async def process_message(msg, chat_id):
     tip_data = None
-    print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
-    if msg.text:
-        print(f"[Process] 🧠 Analyzing text message {msg.id}")
-        tip_data = analyze_message_with_openai_text(msg.text)
-    elif msg.photo:
-        try:
-            print(f"[Process] 🧠 Downloading photo for message {msg.id}")
-            file_path = await tg_client.download_media(msg.photo)
-            print(f"[Process] 🧠 Analyzing image message {msg.id}")
-            tip_data = analyze_message_with_openai_image(file_path)
-        except Exception as e:
-            print("Erro ao processar imagem da mensagem:", e)
-            return None
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
+        # 📄 Mensagem de texto
+        if msg.text:
+            tip_data = analyze_message_with_openai_text(msg.text)
+        # 🖼️ Mensagem com imagem
+        elif msg.photo:
+            try:
+                file_path = await safe_download_media(pyro, msg.photo)
+                if not file_path:
+                    print(f"[Process] ❌ Falha ao fazer download da imagem da mensagem {msg.id}")
+                    return None
+                image_url = upload_image_to_supabase(file_path, f"{chat_id}_{msg.id}")
+                if not image_url:
+                    print(f"[Process] ❌ Upload para Supabase falhou para imagem da mensagem {msg.id}")
+                    return None
+                tip_data = analyze_message_with_openai_image(image_url)
+                # (Opcional) Remover arquivo temporário
+                # os.remove(file_path)
+            except Exception as e:
+                print(f"[Process] ❌ Erro ao processar imagem da mensagem {msg.id}: {e}")
+                return None
+        # 🔇 Outros tipos
+        else:
+            print(f"[Process] ⚠️ Mensagem {msg.id} ignorada (sem texto ou imagem)")
     if tip_data and tip_data.get("is_tip"):
-        tip_data["chat_id"] = chat_id
-        tip_data["message_id"] = msg.id
-        print(f"[Process] ✅ Tip detected in message {msg.id}")
+        tip_data.update({
+            "chat_id": chat_id,
+            "message_id": msg.id,
+            "date": msg.date.isoformat()
+        })
         return tip_data
-    print(f"[Process] ⛔️ Message {msg.id} is not a tip")
     return None
 
 def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
@@ -283,50 +295,37 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
 # --- Atualizado: coleta com limite e FloodWait safe ---
 async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_messages=30):
     collected_tips = []
-    total_checked = 0
-    more_messages = True
+    collected_messages = 0
+    last_message_date = datetime.utcnow()
 
-    print(f"[Collect] 🔍 Starting collection from {chat_id} until {until_date.isoformat()}")
-
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-        while more_messages and total_checked < max_messages:
+    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
+        while collected_messages < max_messages:
             print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
-            messages = await safe_get_chat_history(app, chat_id, limit=batch_size)
-            if not messages:
-                print(f"[Collect] ⚠️ No more messages found for {chat_id}")
-                break
-            for msg in messages:
-                if total_checked >= max_messages:
-                    more_messages = False
+            try:
+                messages = []
+                async for msg in pyro.get_chat_history(chat_id, limit=batch_size):
+                    messages.append(msg)
+                if not messages:
                     break
-                if msg.date < until_date:
-                    more_messages = False
-                    break
-                print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
-                tip_data = None
-                try:
-                    if msg.text:
-                        tip_data = analyze_message_with_openai_text(msg.text)
-                    elif msg.photo:
-                        print(f"[Process] 🧠 Downloading photo for message {msg.id}")
-                        file_path = await safe_download_media(app, msg.photo.file_id, file_name=f"/tmp/{msg.id}.jpg")
-                        if file_path:
-                            print(f"[Process] 🧠 Analyzing image message {msg.id}")
-                            tip_data = analyze_message_with_openai_image(file_path)
-                except Exception as e:
-                    print(f"[Process] ❌ Error processing message {msg.id}: {e}")
-                total_checked += 1
-                if tip_data and tip_data.get("is_tip"):
-                    tip_data["chat_id"] = chat_id
-                    tip_data["message_id"] = msg.id
-                    tip_data["date"] = msg.date.isoformat()
-                    print(f"[Process] ✅ Tip detected in message {msg.id}")
-                    collected_tips.append(tip_data)
-                else:
-                    print(f"[Process] ⛔️ Message {msg.id} is not a tip")
-        print(f"[Collect] ✅ Collected {len(collected_tips)} tips from {total_checked} messages")
+                for msg in messages:
+                    if msg.date < until_date:
+                        return collected_tips
+                    print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
+                    tip_data = await process_message(msg, chat_id)
+                    collected_messages += 1
+                    if tip_data:
+                        print(f"[Process] ✅ Tip detected in message {msg.id}")
+                        collected_tips.append(tip_data)
+                    else:
+                        print(f"[Process] ⛔️ Message {msg.id} is not a tip")
+                    if collected_messages >= max_messages:
+                        break
+            except FloodWait as e:
+                print(f"[FloodWait] ⏳ Esperando {e.value} segundos...")
+                await asyncio.sleep(e.value)
+        print(f"[Collect] ✅ Collected {len(collected_tips)} tips from {collected_messages} messages")
     return collected_tips
-    
+
 @app.post("/test-connection")
 async def test_connection(request: Request):
     auth_check(request)
