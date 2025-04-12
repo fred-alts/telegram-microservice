@@ -337,7 +337,8 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_message
                 if not messages:
                     break
                 for msg in messages:
-                    if msg.date < until_date:
+                    msg_date_utc = msg.date.replace(tzinfo=timezone.utc)
+                    if msg_date_utc < until_date:
                         return collected_tips
                     print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
                     tip_data = await process_message(msg, chat_id, pyro)
