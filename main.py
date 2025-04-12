@@ -237,7 +237,7 @@ async def process_message(msg, chat_id):
             tip_data = analyze_message_with_openai_text(msg.text)
             print(f"[Process] ✅ Resultado texto: {tip_data}")
         elif msg.photo:
-    print(f"[Process] 🧠 A mensagem {msg.id} tem imagem. Verificando detalhes...")
+            print(f"[Process] 🧠 A mensagem {msg.id} tem imagem. Verificando detalhes...")
             if not msg.photo:
                 print(f"[DEBUG] Mensagem {msg.id} não tem foto (valor None ou vazio)")
             else:
