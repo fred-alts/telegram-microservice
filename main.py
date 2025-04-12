@@ -6,7 +6,7 @@ import os
 import json
 import requests
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from supabase import create_client
 from openai import OpenAI
 from PIL import Image
@@ -325,7 +325,7 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
 async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_messages=10):
     collected_tips = []
     collected_messages = 0
-    last_message_date = datetime.utcnow()
+    last_message_date = datetime.now(timezone.utc)
 
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
         while collected_messages < max_messages:
