@@ -243,10 +243,18 @@ async def process_message(msg, chat_id, pyro):
 
         try:
             file_path = await safe_download_media(pyro, msg.photo)
-            if not file_path:
-                print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
-                return None
 
+            if file_path is None:
+                print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
+                print(f"[DEBUG] type(file_path): {type(file_path)}")
+                print(f"[DEBUG] repr(file_path): {repr(file_path)}")
+                print(f"[DEBUG] msg.photo: {msg.photo}")
+                return None
+            
+            if not os.path.exists(file_path):
+                print(f"[Process] ❌ Caminho {file_path} não existe após download.")
+                return None
+            
             print(f"[Process] ✅ Imagem da mensagem {msg.id} salva em {file_path}")
             image_url = upload_image_to_supabase(file_path, f"{chat_id}_{msg.id}")
             if not image_url:
