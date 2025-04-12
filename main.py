@@ -74,15 +74,7 @@ async def safe_get_chat_history(app, chat_id, limit=100):
         async for msg in app.get_chat_history(chat_id, limit=limit):
             messages.append(msg)
         return messages
-
-async def safe_download_media(app, media, file_name=None):
-    try:
-        return await app.download_media(media, file_name=file_name)
-    except FloodWait as e:
-        print(f"[FloodWait] ⏳ Esperando {e.value} segundos (download_media)...")
-        await asyncio.sleep(e.value)
-        return await app.download_media(media, file_name=file_name)
-
+        
 # --- Supabase Upload ---
 def upload_image_to_supabase(file_path: str, identifier: str) -> str:
     if not file_path:
@@ -224,7 +216,6 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         print(f"[Image Analysis] ❌ Exception: {str(e)}")
         return { "is_tip": False, "error": str(e) }
 
-# --- FloodWait-safe wrappers ---
 async def safe_download_media(app, media, file_name=None):
     try:
         return await app.download_media(media, file_name=file_name)
@@ -246,6 +237,7 @@ async def process_message(msg, chat_id):
         # Se tem imagem
         elif msg.photo:
             try:
+                print(f"[DEBUG] msg.id={msg.id}, msg.photo={msg.photo}, msg.media={msg.media}")
                 file_path = await safe_download_media(pyro, msg)
                 if not file_path:
                     print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
