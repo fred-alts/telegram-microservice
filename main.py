@@ -228,38 +228,40 @@ async def safe_download_media(app, media, file_name=None):
         return None
         
 # --- Processar mensagem com validações robustas ---
-async def process_message(msg, chat_id):
+async def process_message(msg, chat_id, pyro):
     print(f"\n[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
     tip_data = None
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
-        if msg.text:
-            print(f"[Process] 🧠 Analisando texto da mensagem {msg.id}")
-            tip_data = analyze_message_with_openai_text(msg.text)
-            print(f"[Process] ✅ Resultado texto: {tip_data}")
-        elif msg.photo:
-            print(f"[Process] 🧠 A mensagem {msg.id} tem imagem. Verificando detalhes...")
-            if not msg.photo:
-                print(f"[DEBUG] Mensagem {msg.id} não tem foto (valor None ou vazio)")
-            else:
-                print(f"[DEBUG] msg.photo.file_id={getattr(msg.photo, 'file_id', '❌ sem file_id')}")
-            try:
-                file_path = await safe_download_media(pyro, msg.photo)
-                if not file_path:
-                    print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
-                    return None
-                print(f"[Process] ✅ Imagem da mensagem {msg.id} salva em {file_path}")
-                image_url = upload_image_to_supabase(file_path, f"{chat_id}_{msg.id}")
-                if not image_url:
-                    print(f"[Process] ❌ Upload falhou para imagem da mensagem {msg.id}")
-                    return None
-                print(f"[Process] ✅ Imagem da mensagem {msg.id} disponível em {image_url}")
-                tip_data = analyze_message_with_openai_image(image_url)
-                print(f"[Process] ✅ Resultado imagem: {tip_data}")
-            except Exception as e:
-                print(f"[Process] ❌ Erro ao processar imagem da mensagem {msg.id}: {e}")
+
+    if msg.text:
+        print(f"[Process] 🧠 Analisando texto da mensagem {msg.id}")
+        tip_data = analyze_message_with_openai_text(msg.text)
+        print(f"[Process] ✅ Resultado texto: {tip_data}")
+
+    elif msg.photo:
+        print(f"[Process] 🧠 A mensagem {msg.id} tem imagem. Verificando detalhes...")
+        print(f"[DEBUG] msg.photo.file_id={getattr(msg.photo, 'file_id', '❌ sem file_id')}")
+
+        try:
+            file_path = await safe_download_media(pyro, msg.photo)
+            if not file_path:
+                print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
                 return None
-        else:
-            print(f"[Process] ℹ️ Mensagem {msg.id} não tem texto nem imagem suportada")
+
+            print(f"[Process] ✅ Imagem da mensagem {msg.id} salva em {file_path}")
+            image_url = upload_image_to_supabase(file_path, f"{chat_id}_{msg.id}")
+            if not image_url:
+                print(f"[Process] ❌ Upload falhou para imagem da mensagem {msg.id}")
+                return None
+
+            print(f"[Process] ✅ Imagem da mensagem {msg.id} disponível em {image_url}")
+            tip_data = analyze_message_with_openai_image(image_url)
+            print(f"[Process] ✅ Resultado imagem: {tip_data}")
+        except Exception as e:
+            print(f"[Process] ❌ Erro ao processar imagem da mensagem {msg.id}: {e}")
+            return None
+
+    else:
+        print(f"[Process] ℹ️ Mensagem {msg.id} não tem texto nem imagem suportada")
 
     if tip_data and tip_data.get("is_tip"):
         tip_data["chat_id"] = chat_id
@@ -323,7 +325,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_message
                     if msg.date < until_date:
                         return collected_tips
                     print(f"[Process] 📩 Message ID: {msg.id} | Date: {msg.date.isoformat()} | Has text: {bool(msg.text)} | Has photo: {bool(msg.photo)}")
-                    tip_data = await process_message(msg, chat_id)
+                    tip_data = await process_message(msg, chat_id, pyro)
                     collected_messages += 1
                     if tip_data:
                         print(f"[Process] ✅ Tip detected in message {msg.id}")
