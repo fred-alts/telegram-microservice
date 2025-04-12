@@ -181,30 +181,31 @@ def analyze_message_with_openai_text(text: str) -> dict:
         print("OpenAI text analysis failed:", str(e))
         return { "is_tip": False, "error": str(e) }
 
-def analyze_message_with_openai_image(image_input: str) -> dict:
+def analyze_message_with_openai_image(image_url: str) -> dict:
     try:
-        if os.path.exists(image_input):
-            with open(image_input, "rb") as f:
-                image_data = f.read()
-        else:
-            response = requests.get(image_input)
-            response.raise_for_status()
-            image_data = response.content
-
-        base64_img = base64.b64encode(image_data).decode("utf-8")
-
+        # Log inicial
+        print(f"[Image Analysis] 🖼️ Downloading image from URL: {image_url}")
+        response = requests.get(image_url)
+        if not response.ok:
+            print(f"[Image Analysis] ❌ Failed to fetch image ({response.status_code}) from {image_url}")
+            return { "is_tip": False, "error": "Failed to download image" }
+        image_bytes = response.content
+        if not image_bytes:
+            print(f"[Image Analysis] ❌ Image content is empty.")
+            return { "is_tip": False, "error": "Empty image content" }
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        data_url = f"data:image/jpeg;base64,{image_base64}"
+        print(f"[Image Analysis] ✅ Image downloaded and encoded (size: {len(image_base64)} chars)")
         result = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": get_tip_prompt()},
+                { "role": "system", "content": get_tip_prompt() },
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_img}"
-                            }
+                            "image_url": { "url": data_url }
                         }
                     ]
                 }
@@ -217,10 +218,11 @@ def analyze_message_with_openai_image(image_input: str) -> dict:
             cleaned = cleaned.removeprefix("```json").strip()
         if cleaned.endswith("```"):
             cleaned = cleaned.removesuffix("```").strip()
+        print(f"[Image Analysis] ✅ OpenAI response received.")
         return json.loads(cleaned)
     except Exception as e:
-        print("OpenAI image analysis failed:", str(e))
-        return {"is_tip": False, "error": str(e)}
+        print(f"[Image Analysis] ❌ Exception: {str(e)}")
+        return { "is_tip": False, "error": str(e) }
 
 async def process_message(msg, chat_id, tg_client):
     tip_data = None
