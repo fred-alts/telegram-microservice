@@ -242,7 +242,14 @@ async def process_message(msg, chat_id, pyro):
         print(f"[DEBUG] msg.photo.file_id={getattr(msg.photo, 'file_id', '❌ sem file_id')}")
 
         try:
-            file_path = await safe_download_media(pyro, msg.photo)
+            # Recupera a mensagem completa por ID antes de baixar a media
+            msg_full = await pyro.get_messages(chat_id, msg.id)
+
+            if not msg_full.photo:
+                print(f"[DEBUG] msg_full.photo está vazio mesmo após get_messages! ID: {msg.id}")
+                return None
+                
+            file_path = await safe_download_media(pyro, msg_full.photo)
 
             if file_path is None:
                 print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
