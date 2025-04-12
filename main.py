@@ -224,39 +224,46 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
         print(f"[Image Analysis] ❌ Exception: {str(e)}")
         return { "is_tip": False, "error": str(e) }
 
+# --- FloodWait-safe wrappers ---
+async def safe_download_media(app, media, file_name=None):
+    try:
+        return await app.download_media(media, file_name=file_name)
+    except FloodWait as e:
+        print(f"[FloodWait] ⏳ Esperando {e.value} segundos (download_media)...")
+        await asyncio.sleep(e.value)
+        return await app.download_media(media, file_name=file_name)
+    except Exception as e:
+        print(f"[safe_download_media] ❌ Erro inesperado no download: {e}")
+        return None
+        
+# --- Processar mensagem com validações robustas ---
 async def process_message(msg, chat_id):
     tip_data = None
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
-        # 📄 Mensagem de texto
+        # Se tem texto
         if msg.text:
             tip_data = analyze_message_with_openai_text(msg.text)
-        # 🖼️ Mensagem com imagem
+        # Se tem imagem
         elif msg.photo:
             try:
                 file_path = await safe_download_media(pyro, msg.photo)
                 if not file_path:
-                    print(f"[Process] ❌ Falha ao fazer download da imagem da mensagem {msg.id}")
+                    print(f"[Process] ❌ Falha no download da imagem da mensagem {msg.id} — file_path é None")
                     return None
                 image_url = upload_image_to_supabase(file_path, f"{chat_id}_{msg.id}")
                 if not image_url:
-                    print(f"[Process] ❌ Upload para Supabase falhou para imagem da mensagem {msg.id}")
+                    print(f"[Process] ❌ Upload falhou para imagem da mensagem {msg.id}")
                     return None
                 tip_data = analyze_message_with_openai_image(image_url)
-                # (Opcional) Remover arquivo temporário
-                # os.remove(file_path)
             except Exception as e:
                 print(f"[Process] ❌ Erro ao processar imagem da mensagem {msg.id}: {e}")
                 return None
-        # 🔇 Outros tipos
-        else:
-            print(f"[Process] ⚠️ Mensagem {msg.id} ignorada (sem texto ou imagem)")
     if tip_data and tip_data.get("is_tip"):
-        tip_data.update({
-            "chat_id": chat_id,
-            "message_id": msg.id,
-            "date": msg.date.isoformat()
-        })
+        tip_data["chat_id"] = chat_id
+        tip_data["message_id"] = msg.id
+        tip_data["date"] = msg.date.isoformat()
         return tip_data
+
     return None
 
 def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
