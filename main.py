@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Header, Body, HTTPException
 from fastapi.responses import JSONResponse
 from pyrogram import Client
 from pydantic import BaseModel
+from dateutil import parser
 import os
 import json
 import requests
@@ -457,9 +458,10 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
     for channel in channels:
         chat_id = channel.get("chat_id")
         since_str = channel.get("since")
-        try:
-            since = datetime.fromisoformat(since_str) if since_str else datetime(2025, 1, 1)
-        except:
+       try:
+            since = parser.isoparse(since_str).astimezone(timezone.utc) if since_str else datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        except Exception as e:
+            print(f"[Collect] ⚠️ Erro ao interpretar 'since': {e}")
             continue
         try:
             collected_tips.extend(await collect_tips_until_date(chat_id, since))
