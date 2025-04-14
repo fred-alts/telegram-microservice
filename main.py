@@ -458,7 +458,7 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
     for channel in channels:
         chat_id = channel.get("chat_id")
         since_str = channel.get("since")
-       try:
+        try:
             since = parser.isoparse(since_str).astimezone(timezone.utc) if since_str else datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
         except Exception as e:
             print(f"[Collect] ⚠️ Erro ao interpretar 'since': {e}")
