@@ -330,35 +330,48 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_message
 
     async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
         seen_ids = set()
-        last_message_id = None
-        while collected_messages < max_messages:
-            print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
-            try:
-                messages = []
-                async for msg in pyro.get_chat_history(chat_id, limit=batch_size, offset_id=last_message_id):
-                    messages.append(msg)
-                if not messages:
-                    break
-                for msg in messages:
-                    if msg.id in seen_ids:
-                        continue
-                    seen_ids.add(msg.id)
-                    msg_date_utc = msg.date.replace(tzinfo=timezone.utc)
-                    if msg_date_utc < until_date:
-                        return collected_tips
-                    tip_data = await process_message(msg, chat_id, pyro)
-                    collected_messages += 1
-                    if tip_data:
-                        print(f"[Process] ✅ Tip detected in message {msg.id}")
-                        collected_tips.append(tip_data)
-                    else:
-                        print(f"[Process] ⛔️ Message {msg.id} is not a tip")
-                    if collected_messages >= max_messages:
-                        break
-                last_message_id = messages[-1].id
-            except FloodWait as e:
-                print(f"[FloodWait] ⏳ Esperando {e.value} segundos...")
-                await asyncio.sleep(e.value)
+last_message_id = None
+
+while collected_messages < max_messages:
+    print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
+    try:
+        messages = []
+        if last_message_id:
+            history = pyro.get_chat_history(chat_id, limit=batch_size, offset_id=last_message_id)
+        else:
+            history = pyro.get_chat_history(chat_id, limit=batch_size)
+
+        async for msg in history:
+            messages.append(msg)
+
+        if not messages:
+            break
+
+        for msg in messages:
+            if msg.id in seen_ids:
+                continue
+            seen_ids.add(msg.id)
+
+            msg_date_utc = msg.date.replace(tzinfo=timezone.utc)
+            if msg_date_utc < until_date:
+                return collected_tips
+
+            tip_data = await process_message(msg, chat_id, pyro)
+            collected_messages += 1
+            if tip_data:
+                print(f"[Process] ✅ Tip detected in message {msg.id}")
+                collected_tips.append(tip_data)
+            else:
+                print(f"[Process] ⛔️ Message {msg.id} is not a tip")
+
+            if collected_messages >= max_messages:
+                break
+
+        last_message_id = messages[-1].id
+
+    except FloodWait as e:
+        print(f"[FloodWait] ⏳ Esperando {e.value} segundos...")
+        await asyncio.sleep(e.value)
         print(f"[Collect] ✅ Collected {len(collected_tips)} tips from {collected_messages} messages")
     return collected_tips
 
