@@ -449,26 +449,36 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
 @app.post("/collect-tips")
 async def collect_tips(request: Request, payload: dict = Body(...), authorization: str = Header(None)):
     log_request(request, payload)
-    if not is_authorized(authorization):
-        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
-    channels = payload.get("channels")
-    collected_tips = []
-    if not channels:
-        return JSONResponse(status_code=400, content={"error": "Missing channels"})
-    for channel in channels:
-        chat_id = channel.get("chat_id")
-        since_str = channel.get("since")
-        try:
-            since = parser.isoparse(since_str).astimezone(timezone.utc) if since_str else datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
-        except Exception as e:
-            print(f"[Collect] ⚠️ Erro ao interpretar 'since': {e}")
-            continue
-        try:
-            collected_tips.extend(await collect_tips_until_date(chat_id, since))
-        except Exception as e:
-            print(f"[Collect] ❌ Error with {chat_id}: {e}")
-    return {"success": True, "tips": collected_tips}
-
+    try:
+        if not is_authorized(authorization):
+            return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+        channels = payload.get("channels")
+        collected_tips = []
+        if not channels:
+            print("[Collect] ❌ Nenhum canal recebido")
+            return JSONResponse(status_code=400, content={"error": "Missing channels"})
+        for channel in channels:
+            chat_id = channel.get("chat_id")
+            since_str = channel.get("since")
+            try:
+                since = parser.isoparse(since_str).astimezone(timezone.utc) if since_str else datetime.utcnow().replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
+                )
+            except Exception as e:
+                print(f"[Collect] ⚠️ Erro ao interpretar 'since' para {chat_id}: {e}")
+                continue
+            try:
+                tips = await collect_tips_until_date(chat_id, since)
+                collected_tips.extend(tips)
+            except Exception as e:
+                print(f"[Collect] ❌ Erro ao coletar tips para {chat_id}: {e}")
+        print(f"[Collect] ✅ Finalizando com {len(collected_tips)} tips.")
+        print("[Collect] ✅ Enviando resposta...")
+        return JSONResponse(content={"success": True, "tips": collected_tips})
+    except Exception as e:
+        print(f"[Collect] ❌ EXCEPTION inesperada em /collect-tips: {e}")
+        return JSONResponse(status_code=500, content={"error": "Internal error", "details": str(e)})
+        
 @app.post("/get-tipster-strategy")
 async def get_tipster_strategy(request: Request, body: AnalyzeStrategyRequest, authorization: str = Header(None)):
     log_request(request, body.dict())
