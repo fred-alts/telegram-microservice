@@ -111,7 +111,7 @@ Se for uma tip, retorne exatamente neste formato:
   "is_tip": true,
   "type": "single" ou "multiple",
   "odd": float,
-  "bets": [
+  "tip_entries": [
     {
       "match": "Time A vs Time B",
       "tournament": "Nome do torneio (se visível)",
@@ -130,7 +130,9 @@ A tua tarefa é analisar uma lista de apostas (tips) e identificar a estratégia
 
 Cada tip contém:
 - `date`: data e hora em que foi publicada a tip
-- `bets[]`: apostas feitas, com data e hora do jogo (`datetime`)
+- `tip_entries[]`: apostas feitas, com data e hora do jogo (`datetime`)
+
+Podes aferir que uma tip foi colocada em live quando a data da tip é dentro do horário do jogo
 
 Devolve o seguinte JSON:
 {
