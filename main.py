@@ -285,6 +285,17 @@ async def process_message(msg, chat_id, pyro):
         tip_data["chat_id"] = chat_id
         tip_data["message_id"] = msg.id
         tip_data["date"] = msg.date.isoformat()
+
+        # Adiciona o texto da mensagem, se houver
+        if msg.text:
+            tip_data["text"] = msg.text
+
+        # Se foi imagem e tiver URL, adiciona como image_url
+        if msg.photo and 'image_url' in locals():
+            tip_data["image_url"] = image_url
+            if msg.caption:
+                tip_data["text"] = msg.caption
+        
         print(f"[Process] ✅ Tip válida detectada na mensagem {msg.id}")
         return tip_data
 
