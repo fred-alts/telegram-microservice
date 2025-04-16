@@ -16,7 +16,6 @@ import asyncio
 import uuid
 import time
 from pyrogram.errors import FloodWait
-import asyncio
 
 app = FastAPI()
 
@@ -32,6 +31,24 @@ SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "telegram-tips")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# --- SafeTelegramClient com tratamento de FloodWait ---
+class SafeTelegramClient(Client):
+    async def __aenter__(self):
+        self._real_enter = super().__aenter__
+        self._real_exit = super().__aexit__
+        return await self._real_enter()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self._real_exit(exc_type, exc_val, exc_tb)
+
+    async def safe_call(self, func, *args, **kwargs):
+        while True:
+            try:
+                return await func(*args, **kwargs)
+            except FloodWait as e:
+                print(f"[SafeTelegramClient] 🕒 FloodWait: esperando {e.value} segundos...")
+                await asyncio.sleep(e.value)
 
 # --- LOG ---
 def log_request(request: Request, payload: dict):
@@ -341,7 +358,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_message
     collected_messages = 0
     last_message_date = datetime.now(timezone.utc)
     last_message_id = None
-    async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
+    async with SafeTelegramClient("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as pyro:
         while collected_messages < max_messages:
             print(f"[Collect] 🔄 Fetching {batch_size} messages from {chat_id}")
             try:
@@ -349,7 +366,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_message
                 if last_message_id:
                     history = pyro.get_chat_history(chat_id, limit=batch_size, offset_id=last_message_id)
                 else:
-                    history = pyro.get_chat_history(chat_id, limit=batch_size)
+                    history = await pyro.safe_call(pyro.get_chat_history, chat_id, limit=batch_size)
                 async for msg in history:
                     messages.append(msg)
                 if not messages:
@@ -388,7 +405,7 @@ async def test_channel_message(request: Request, body: dict = Body(...), authori
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
     try:
-        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+        async with SafeTelegramClient("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
             try:
                 messages = [msg async for msg in app.get_chat_history(chat_id, limit=1)]
             except Exception as fetch_error:
@@ -408,7 +425,7 @@ async def test_channel_message(request: Request, body: dict = Body(...), authori
                     last_message["content"] = msg.text
                 elif msg.photo:
                     try:
-                        file_path = await app.download_media(msg.photo)
+                        file_path = await app.safe_call(app.download_media, msg.photo)
                         photo_url = upload_image_to_supabase(file_path, f"lastmsg_{msg.id}")
                         last_message["type"] = "photo"
                         last_message["content"] = photo_url
@@ -443,19 +460,19 @@ async def get_channel_info(request: Request, payload: dict = Body(...), authoriz
     if not chat_id:
         return JSONResponse(status_code=400, content={"error": "Missing chat_id"})
     try:
-        async with Client("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
-            chat = await app.get_chat(chat_id)
+        async with SafeTelegramClient("session", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, no_updates=True) as app:
+            chat = await app.safe_call(app.get_chat, chat_id)
             photo_url = None
             if chat.photo:
                 file_id = chat.photo.big_file_id
-                file_path = await app.download_media(file_id, file_name=f"{chat.id}_profile.jpg")
+                file_path = await app.safe_call(app.download_media, file_id, file_name=f"{chat.id}_profile.jpg")
                 photo_url = upload_image_to_supabase(file_path, chat.id)
             info = {
                 "chat_id": chat_id,
                 "title": chat.title,
                 "username": chat.username,
                 "type": chat.type,
-                "members": chat.members_count,
+                "members": getattr(chat, "members_count", None),
                 "description": getattr(chat, "bio", None) or getattr(chat, "description", None),
                 "photo_url": photo_url,
                 "invite_link": chat.invite_link
