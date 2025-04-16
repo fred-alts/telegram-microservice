@@ -371,7 +371,7 @@ async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_message
                 if last_message_id:
                     history = pyro.get_chat_history(chat_id, limit=batch_size, offset_id=last_message_id)
                 else:
-                    history = await pyro.safe_call(pyro.get_chat_history, chat_id, limit=batch_size)
+                    history = pyro.get_chat_history(chat_id, limit=batch_size)
                 async for msg in history:
                     messages.append(msg)
                 if not messages:
@@ -504,6 +504,7 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
                 since = parser.isoparse(since_str).astimezone(timezone.utc) if since_str else datetime.utcnow().replace(
                     hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
                 )
+                print(f"[Collect] ▶️ Iniciando coleta para {chat_id} desde {since.isoformat()}")
             except Exception as e:
                 print(f"[Collect] ⚠️ Erro ao interpretar 'since' para {chat_id}: {e}")
                 continue
@@ -512,6 +513,7 @@ async def collect_tips(request: Request, payload: dict = Body(...), authorizatio
                 collected_tips.extend(tips)
             except Exception as e:
                 print(f"[Collect] ❌ Erro ao coletar tips para {chat_id}: {e}")
+            await asyncio.sleep(2)
         print(f"[Collect] ✅ Finalizando com {len(collected_tips)} tips.")
         print("[Collect] ✅ Enviando resposta...")
         return JSONResponse(content={"success": True, "tips": collected_tips})
