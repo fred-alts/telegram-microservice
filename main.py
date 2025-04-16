@@ -126,7 +126,7 @@ Se for uma tip, retorne exatamente neste formato:
 ```json
 {
   "is_tip": true,
-  "type": "single" ou "multiple",
+  "type": "single" | "multiple" | "incomplete",
   "odd": float,
   "tip_entries": [
     {
@@ -139,6 +139,11 @@ Se for uma tip, retorne exatamente neste formato:
     }
   ]
 }
+
+Se não for possível obter o(s) jogo(s), o(s) market(s), o(s) outcome(s) e a odd da tip, então a tip não é válida e deves marcar como type "incomplete"
+
+Caso não consigas obter o Tournment do jogo e a data/hora do jogo, procura na internet se ha jogos a decorrer ou proximos jogos para aferir que jogo é este da tip. 
+As tips são normalmente para jogos próximos. 
 """
 
 def get_strategy_prompt():
