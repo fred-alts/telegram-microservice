@@ -336,7 +336,7 @@ def analyze_tipster_strategy_with_openai(tips: list[dict]) -> dict:
         }
         
 # --- Atualizado: coleta com limite e FloodWait safe ---
-async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_messages=30):
+async def collect_tips_until_date(chat_id, until_date, batch_size=5, max_messages=5):
     collected_tips = []
     collected_messages = 0
     last_message_date = datetime.now(timezone.utc)
