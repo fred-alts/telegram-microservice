@@ -104,23 +104,32 @@ async def safe_get_chat_history(app, chat_id, limit=100):
         return messages
         
 # --- Supabase Upload ---
-def upload_image_to_supabase(file_path: str, identifier: str) -> str:
-    if not file_path:
-        return None
-    try:
-        converted_path = f"/tmp/{uuid.uuid4().hex}.jpeg"
-        with Image.open(file_path) as img:
-            rgb_img = img.convert("RGB")
-            rgb_img.save(converted_path, "JPEG")
-
-        file_name = f"avatars/{identifier}_{datetime.utcnow().isoformat()}.jpeg"
-        with open(converted_path, "rb") as f:
-            supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
-
-        return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
-    except Exception as e:
-        print("Upload failed:", e)
-        return None
+def upload_image_to_supabase(file_path: str, identifier: str, retries: int = 2, delay: int = 2) -> str:
+    for attempt in range(retries + 1):
+        try:
+            if not file_path or not os.path.exists(file_path):
+                print("[Upload] ❌ Caminho inválido:", file_path)
+                return None
+            converted_path = f"/tmp/{uuid.uuid4().hex}.jpeg"
+            with Image.open(file_path) as img:
+                img.verify()
+            with Image.open(file_path) as img:
+                rgb_img = img.convert("RGB")
+                rgb_img.save(converted_path, "JPEG")
+            file_name = f"avatars/{identifier}_{datetime.utcnow().isoformat()}.jpeg"
+            with open(converted_path, "rb") as f:
+                supabase.storage.from_(SUPABASE_BUCKET).upload(file_name, f, {"content-type": "image/jpeg"})
+            final_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{file_name}"
+            os.remove(file_path) if os.path.exists(file_path) else None
+            os.remove(converted_path) if os.path.exists(converted_path) else None
+            return final_url
+        except Exception as e:
+            print(f"[Upload] ❌ Tentativa {attempt + 1} falhou:", str(e))
+            if attempt < retries:
+                time.sleep(delay)
+            else:
+                print("[Upload] ❌ Todas as tentativas de upload falharam.")
+                return None
 
 # --- OpenAI Prompt ---
 def get_tip_prompt():
