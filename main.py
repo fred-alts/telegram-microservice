@@ -203,14 +203,32 @@ def analyze_message_with_openai_text(text: str) -> dict:
             cleaned = cleaned.removeprefix("```json").strip()
         if cleaned.endswith("```"):
             cleaned = cleaned.removesuffix("```").strip()
-        return json.loads(cleaned)
+        if not cleaned:
+            return { "is_tip": False, "error": "Empty response from OpenAI" }
+        if not cleaned.startswith("{") and not cleaned.startswith("["):
+            print(f"[Text Analysis] ⚠️ OpenAI returned invalid format:\n{cleaned}")
+            return {
+                "is_tip": False,
+                "error": "Invalid JSON format",
+                "raw_content": cleaned,
+                "json_error": True
+            }
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            print(f"[Text Analysis] ❌ JSONDecodeError: {str(e)}")
+            return {
+                "is_tip": False,
+                "error": str(e),
+                "raw_content": cleaned,
+                "json_error": True
+            }
     except Exception as e:
-        print("OpenAI text analysis failed:", str(e))
+        print("[Text Analysis] ❌ Unexpected error:", str(e))
         return { "is_tip": False, "error": str(e) }
 
 def analyze_message_with_openai_image(image_url: str) -> dict:
     try:
-        # Log inicial
         print(f"[Image Analysis] 🖼️ Downloading image from URL: {image_url}")
         response = requests.get(image_url)
         if not response.ok:
@@ -240,15 +258,34 @@ def analyze_message_with_openai_image(image_url: str) -> dict:
             temperature=0.0
         )
         content = result.choices[0].message.content.strip()
+        print(f"[Image Analysis] ⚠️ OpenAI response content: {repr(content)}")
         cleaned = content.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned.removeprefix("```json").strip()
         if cleaned.endswith("```"):
             cleaned = cleaned.removesuffix("```").strip()
-        print(f"[Image Analysis] ✅ OpenAI response received.")
-        return json.loads(cleaned)
+        if not cleaned:
+            return { "is_tip": False, "error": "Empty response from OpenAI" }
+        if not cleaned.startswith("{") and not cleaned.startswith("["):
+            print(f"[Image Analysis] ⚠️ OpenAI returned invalid format:\n{cleaned}")
+            return {
+                "is_tip": False,
+                "error": "Invalid JSON format",
+                "raw_content": cleaned,
+                "json_error": True
+            }
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            print(f"[Image Analysis] ❌ JSONDecodeError: {str(e)}")
+            return {
+                "is_tip": False,
+                "error": str(e),
+                "raw_content": cleaned,
+                "json_error": True
+            }
     except Exception as e:
-        print(f"[Image Analysis] ❌ Exception: {str(e)}")
+        print(f"[Image Analysis] ❌ Unexpected Exception: {str(e)}")
         return { "is_tip": False, "error": str(e) }
 
 async def safe_download_media(app, media, file_name=None):
